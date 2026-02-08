@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.mococo/
+repos/*
+!repos/.gitkeep
+*.log
