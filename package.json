@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "AI Team Company on Discord — multi-engine AI agents as distinct team identities",
   "type": "module",
+  "bin": {
+    "mococo": "dist/cli/index.js"
+  },
+  "files": [
+    "dist/",
+    "hooks/"
+  ],
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
