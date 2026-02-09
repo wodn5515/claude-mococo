@@ -37,6 +37,7 @@ export interface TeamsConfig {
 export interface ConversationMessage {
   teamId: string | 'human';
   teamName: string;
+  discordId?: string;
   content: string;
   timestamp: Date;
   mentions: string[];

@@ -100,6 +100,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         const humanMsg: ConversationMessage = {
           teamId: 'human',
           teamName: msg.author.displayName,
+          discordId: msg.author.id,
           content,
           timestamp: new Date(),
           mentions: findMentionedTeams(content, config).map(t => t.id),
@@ -117,6 +118,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         const humanMsg: ConversationMessage = {
           teamId: 'human',
           teamName: msg.author.displayName,
+          discordId: msg.author.id,
           content,
           timestamp: new Date(),
           mentions: [team.id],
