@@ -3,6 +3,7 @@ dist/
 .env
 .mococo/
 .omc/
-repos/*
-!repos/.gitkeep
+repos/
+prompts/
+teams.json
 *.log
