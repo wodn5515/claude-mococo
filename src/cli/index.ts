@@ -26,6 +26,11 @@ async function main(): Promise<void> {
       await runList();
       break;
     }
+    case 'edit': {
+      const { runEdit } = await import('./commands/edit.js');
+      await runEdit(arg ?? '');
+      break;
+    }
     case 'remove':
     case 'rm': {
       const { runRemove } = await import('./commands/remove.js');
@@ -38,6 +43,7 @@ async function main(): Promise<void> {
 Usage:
   mococo init              Create a new workspace
   mococo add               Add an assistant (interactive)
+  mococo edit <id>         Edit an assistant's settings
   mococo start             Start all assistants
   mococo list              List configured assistants
   mococo remove <id>       Remove an assistant

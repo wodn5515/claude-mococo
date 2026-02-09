@@ -25,6 +25,13 @@ const PERMISSION_PRESETS: Record<string, { allow?: string[]; deny?: string[] }> 
 
 const AVATAR_KEYS = ['robot', 'crown', 'brain', 'gear', 'palette', 'shield', 'eye', 'test', 'book'];
 
+const PERSONALITY_PRESETS: Record<string, string> = {
+  'Professional — formal, thorough, structured': 'Professional and thorough. Communicates clearly with structured responses. Focuses on correctness and best practices.',
+  'Casual — friendly, concise, direct': 'Casual and friendly. Keeps messages short and to the point. Uses a conversational tone.',
+  'Mentor — patient, educational, explains why': 'Patient and educational. Explains the reasoning behind decisions. Takes time to teach, not just do.',
+  'Custom': '',
+};
+
 export async function runAdd(): Promise<void> {
   const ws = requireWorkspace();
   const teamsJsonPath = path.join(ws, 'teams.json');
@@ -32,7 +39,8 @@ export async function runAdd(): Promise<void> {
 
   console.log('Add a new assistant\n');
 
-  // 1. ID
+  // --- Identity ---
+  console.log('── Identity ──');
   const id = await ask('Assistant ID (lowercase, e.g. coder)');
   if (!id || !/^[a-z][a-z0-9_-]*$/.test(id)) {
     console.error('ID must be lowercase alphanumeric (start with letter).');
@@ -43,37 +51,53 @@ export async function runAdd(): Promise<void> {
     process.exit(1);
   }
 
-  // 2. Display name
   const name = await ask('Display name', id.charAt(0).toUpperCase() + id.slice(1));
+  const role = await ask('Role description', 'AI assistant');
 
-  // 3. Role
-  const role = await ask('Role (one line description)', `AI assistant`);
+  // Personality
+  const personalityNames = Object.keys(PERSONALITY_PRESETS);
+  const personalityChoice = await choose('Personality:', personalityNames, 1);
+  let personality = PERSONALITY_PRESETS[personalityChoice];
+  if (!personality) {
+    personality = await ask('Describe the personality');
+  }
 
-  // 4. Engine
+  // Expertise
+  console.log('Expertise (comma-separated, e.g. "TypeScript, React, Node.js"):');
+  const expertiseStr = await ask('  Skills', '');
+  const expertise = expertiseStr
+    ? expertiseStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  // Custom rules
+  console.log('Custom rules (comma-separated, e.g. "Always write tests, Use ESLint"):');
+  const rulesStr = await ask('  Rules', '');
+  const rules = rulesStr
+    ? rulesStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
+
+  // --- Engine ---
+  console.log('\n── Engine ──');
   const engine = await choose('Engine:', ['claude', 'codex', 'gemini'], 0);
-
-  // 5. Model
   const model = await ask('Model', ENGINE_DEFAULTS[engine] ?? 'sonnet');
-
-  // 6. Max budget
   const budgetStr = await ask('Max budget per invocation ($)', '10');
   const maxBudget = parseFloat(budgetStr) || 10;
 
-  // 7. Discord token
+  // --- Tokens ---
+  console.log('\n── Tokens ──');
   const discordToken = await ask('Discord bot token');
-
-  // 8. GitHub PAT
   const githubToken = await ask('GitHub PAT (optional, press enter to skip)');
 
-  // 9. Leader?
-  const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
-
-  // 10. Permission preset
+  // --- Permissions ---
+  console.log('\n── Permissions ──');
   const presetNames = Object.keys(PERMISSION_PRESETS);
   const presetChoice = await choose('Permission preset:', presetNames, 1);
   const permissions = PERMISSION_PRESETS[presetChoice] ?? {};
 
-  // 11. Git identity
+  // --- Git identity ---
+  console.log('\n── Git identity ──');
   const gitName = await ask('Git author name', `${name} (mococo)`);
   const gitEmail = await ask('Git author email', `mococo-${id}@users.noreply.github.com`);
 
@@ -110,12 +134,12 @@ export async function runAdd(): Promise<void> {
   // Generate prompt file
   const promptPath = path.join(ws, 'prompts', `${id}.md`);
   if (!fs.existsSync(promptPath)) {
-    fs.writeFileSync(promptPath, generatePrompt({ name, role, isLeader }));
+    fs.writeFileSync(promptPath, generatePrompt({ name, role, personality, expertise, rules, isLeader }));
   }
 
   console.log(`\nAssistant "${name}" (${id}) added.`);
   console.log(`  Config:  teams.json`);
-  console.log(`  Prompt:  prompts/${id}.md`);
+  console.log(`  Prompt:  prompts/${id}.md  (edit this for full control)`);
   console.log(`  Tokens:  .env`);
   console.log(`\nRun \`mococo start\` to launch.`);
 }
