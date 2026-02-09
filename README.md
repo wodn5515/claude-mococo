@@ -39,18 +39,7 @@ npm install -g @google/gemini-cli # Gemini CLI (optional)
    - Permissions: `Send Messages`, `Read Message History`, `Embed Links`, `Attach Files`
    - Copy the URL → open in browser → add to your server
 
-### 3. Create a GitHub account for the bot
-
-So commits and PRs show as coming from the assistant, not you.
-
-1. Create a GitHub account (e.g. `my-assistant-bot`)
-2. [Generate a fine-grained PAT](https://github.com/settings/tokens?type=beta) with:
-   - **Contents**: Read and Write
-   - **Pull requests**: Read and Write
-   - **Metadata**: Read-only
-3. Add this account as a collaborator to your repos
-
-### 4. Initialize and add your assistant
+### 3. Initialize and add your assistant
 
 ```bash
 mkdir my-team && cd my-team
@@ -58,7 +47,9 @@ mococo init                   # creates workspace (asks for Discord channel ID)
 mococo add                    # interactive wizard — asks for name, engine, tokens, etc.
 ```
 
-### 5. Link your repos and start
+Commits will show the assistant's name as the author (configured via `git.name` in `teams.json`). If you need assistants to push or create PRs, provide your GitHub PAT during `mococo add`.
+
+### 4. Link your repos and start
 
 ```bash
 ln -s /path/to/my-app repos/my-app
@@ -89,7 +80,7 @@ mococo add        # repeat for each new assistant
 
 Each one gets:
 - Its own Discord bot (separate identity in chat)
-- Its own GitHub account (separate commit author)
+- Its own git author name (visible in commit messages)
 - Its own entry in `teams.json` (engine, personality, permissions)
 
 You can build a full team this way:

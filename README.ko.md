@@ -39,18 +39,7 @@ npm install -g @google/gemini-cli # Gemini CLI (선택)
    - Permissions: `Send Messages`, `Read Message History`, `Embed Links`, `Attach Files`
    - URL 복사 → 브라우저에서 열기 → 서버에 추가
 
-### 3. 봇용 GitHub 계정 만들기
-
-커밋과 PR이 본인이 아닌 어시스턴트 이름으로 표시되도록 합니다.
-
-1. GitHub 계정 생성 (예: `my-assistant-bot`)
-2. [Fine-grained PAT 생성](https://github.com/settings/tokens?type=beta):
-   - **Contents**: Read and Write
-   - **Pull requests**: Read and Write
-   - **Metadata**: Read-only
-3. 작업할 저장소에 이 계정을 collaborator로 추가
-
-### 4. 워크스페이스 생성 및 어시스턴트 추가
+### 3. 워크스페이스 생성 및 어시스턴트 추가
 
 ```bash
 mkdir my-team && cd my-team
@@ -58,7 +47,9 @@ mococo init                   # 워크스페이스 생성 (Discord 채널 ID 입
 mococo add                    # 대화형 마법사 — 이름, 엔진, 토큰 등 입력
 ```
 
-### 5. 저장소 연결 및 시작
+커밋에는 어시스턴트 이름이 작성자로 표시됩니다 (`teams.json`의 `git.name`으로 설정). 어시스턴트가 푸시나 PR을 생성해야 하면 `mococo add` 시 GitHub PAT를 입력하세요.
+
+### 4. 저장소 연결 및 시작
 
 ```bash
 ln -s /경로/my-app repos/my-app
@@ -89,7 +80,7 @@ mococo add        # 새 어시스턴트마다 반복
 
 각 어시스턴트는:
 - 고유한 Discord 봇 (채팅에서 별도 신원)
-- 고유한 GitHub 계정 (별도 커밋 작성자)
+- 고유한 git 작성자 이름 (커밋 메시지에 표시)
 - `teams.json`의 별도 항목 (엔진, 성격, 권한)
 
 이렇게 팀을 구성할 수 있습니다:
