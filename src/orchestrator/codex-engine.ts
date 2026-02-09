@@ -9,19 +9,33 @@ export class CodexEngine extends BaseEngine {
     console.log(`[codex:${this.opts.teamId}] Starting codex (model: ${this.opts.model})`);
 
     this.proc = spawn('codex', [
-      '--quiet',
-      '--full-auto',
-      '--model', this.opts.model,
-      '-p', this.opts.prompt,
+      'exec',
+      '-c', `model="${this.opts.model}"`,
+      '--json',
+      this.opts.prompt,
     ], {
       cwd: this.opts.cwd,
       env: this.getTeamEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    let stdout = '';
-    this.proc.stdout!.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+    let lastMessage = '';
+    const stdoutRl = readline.createInterface({ input: this.proc.stdout! });
+    stdoutRl.on('line', (line) => {
+      try {
+        const event = JSON.parse(line);
+        // Capture the last assistant message as output
+        if (event.type === 'message' && event.role === 'assistant') {
+          lastMessage = typeof event.content === 'string'
+            ? event.content
+            : Array.isArray(event.content)
+              ? event.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+              : '';
+        }
+      } catch {
+        // non-JSON line
+        console.log(`[codex:${this.opts.teamId}] stdout: ${line.slice(0, 200)}`);
+      }
     });
 
     // Log stderr
@@ -35,8 +49,8 @@ export class CodexEngine extends BaseEngine {
     });
 
     this.proc.on('exit', (code) => {
-      console.log(`[codex:${this.opts.teamId}] exited with code ${code} (stdout: ${stdout.length} chars)`);
-      this.emit('result', { type: 'result', result: stdout.trim(), total_cost_usd: 0 });
+      console.log(`[codex:${this.opts.teamId}] exited with code ${code} (output: ${lastMessage.length} chars)`);
+      this.emit('result', { type: 'result', result: lastMessage.trim(), total_cost_usd: 0 });
       this.emit('exit', code);
     });
   }
