@@ -12,6 +12,7 @@ export class CodexEngine extends BaseEngine {
       'exec',
       '-c', `model="${this.opts.model}"`,
       '--json',
+      '--skip-git-repo-check',
       this.opts.prompt,
     ], {
       cwd: this.opts.cwd,
