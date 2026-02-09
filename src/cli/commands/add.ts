@@ -76,6 +76,8 @@ export async function runAdd(): Promise<void> {
     ? rulesStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
+  const bossTitle = await ask('What should this bot call you? (e.g. Boss, Sir)', '');
+
   const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
 
   // --- Engine ---
@@ -143,7 +145,7 @@ export async function runAdd(): Promise<void> {
   // Generate prompt file
   const promptPath = path.join(ws, 'prompts', `${id}.md`);
   if (!fs.existsSync(promptPath)) {
-    fs.writeFileSync(promptPath, generatePrompt({ name, role, personality, expertise, rules, isLeader }));
+    fs.writeFileSync(promptPath, generatePrompt({ name, role, personality, expertise, rules, isLeader, bossTitle: bossTitle || undefined }));
   }
 
   console.log(`\nAssistant "${name}" (${id}) added.`);

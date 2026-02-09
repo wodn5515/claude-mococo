@@ -178,7 +178,6 @@ async function handleTeamInvocation(
   env: EnvConfig,
 ) {
   if (isBusy(team.id)) {
-    await sendAsTeam(channelId, team, `I'm busy, queuing your request...`).catch(() => {});
     await waitForFree(team.id);
   }
 
@@ -187,7 +186,10 @@ async function handleTeamInvocation(
   try {
     const conversation = getRecentConversation(channelId, config.conversationWindow);
 
-    await sendAsTeam(channelId, team, `On it. Let me work on this...`).catch(() => {});
+    // Show typing indicator instead of a message
+    const typingClient = teamClients.get(team.id);
+    const typingChannel = typingClient?.channels.cache.get(channelId) as TextChannel | undefined;
+    await typingChannel?.sendTyping().catch(() => {});
 
     const result = await invokeTeam(team, {
       teamId: team.id,

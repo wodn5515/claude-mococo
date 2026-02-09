@@ -5,6 +5,7 @@ export interface PromptOptions {
   expertise: string[];
   rules: string[];
   isLeader: boolean;
+  bossTitle?: string;
 }
 
 export function generatePrompt(opts: PromptOptions): string {
@@ -28,9 +29,13 @@ export function generatePrompt(opts: PromptOptions): string {
     ? '\n' + opts.rules.map(r => `- ${r}`).join('\n')
     : '';
 
+  const bossLine = opts.bossTitle
+    ? `\nWhen addressing the human, always call them **${opts.bossTitle}**.`
+    : '';
+
   return `# ${opts.name}
 
-You are **${opts.name}**, an AI assistant on Discord.
+You are **${opts.name}**, an AI assistant on Discord.${bossLine}
 
 ## Role
 ${opts.role}
