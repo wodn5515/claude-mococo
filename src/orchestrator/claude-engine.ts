@@ -29,11 +29,21 @@ export class ClaudeEngine extends BaseEngine {
         this.emit('message', event);
         if (event.type === 'result') this.emit('result', event);
       } catch {
-        // non-JSON line, ignore
+        // non-JSON line, log it
+        console.log(`[claude:${this.opts.teamId}] stdout: ${line.slice(0, 200)}`);
       }
     });
 
-    this.proc.on('exit', (code) => this.emit('exit', code));
+    // Log stderr so we can see Claude errors
+    const stderrRl = readline.createInterface({ input: this.proc.stderr! });
+    stderrRl.on('line', (line) => {
+      console.error(`[claude:${this.opts.teamId}] stderr: ${line.slice(0, 300)}`);
+    });
+
+    this.proc.on('exit', (code) => {
+      console.log(`[claude:${this.opts.teamId}] exited with code ${code}`);
+      this.emit('exit', code);
+    });
   }
 
   kill() {
