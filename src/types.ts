@@ -18,6 +18,7 @@ export interface TeamConfig {
   prompt: string;
   isLeader?: boolean;
   channels?: string[];   // channel IDs — empty/omitted = all channels
+  discordUserId?: string; // auto-populated on first login
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
   githubToken: string;          // each team has its own GitHub account

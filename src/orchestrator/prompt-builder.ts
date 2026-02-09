@@ -17,7 +17,8 @@ export async function buildTeamPrompt(
     .filter(t => t.id !== team.id)
     .map(t => {
       const engineTag = t.engine !== 'claude' ? ` [${t.engine}]` : '';
-      return `- @${t.name}${engineTag}`;
+      const mention = t.discordUserId ? ` → tag with <@${t.discordUserId}>` : '';
+      return `- @${t.name}${engineTag}${mention}`;
     })
     .join('\n');
 

@@ -74,6 +74,18 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     client.on('ready', () => {
       if (client.user) {
         botUserIds.add(client.user.id);
+        // Auto-save Discord user ID to teams.json if not already set
+        if (team.discordUserId !== client.user.id) {
+          team.discordUserId = client.user.id;
+          try {
+            const teamsJsonPath = path.resolve(config.workspacePath, 'teams.json');
+            const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
+            if (raw.teams[team.id]) {
+              raw.teams[team.id].discordUserId = client.user.id;
+              fs.writeFileSync(teamsJsonPath, JSON.stringify(raw, null, 2) + '\n');
+            }
+          } catch {}
+        }
         console.log(`  ${team.name} bot online as @${client.user.tag}`);
       }
     });
