@@ -9,6 +9,8 @@ async function main() {
   const env: EnvConfig = {
     workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
+    tasksCategoryId: process.env.TASKS_CATEGORY_ID || undefined,
+    archiveCategoryId: process.env.ARCHIVE_CATEGORY_ID || undefined,
   };
 
   if (!env.workChannelId) {

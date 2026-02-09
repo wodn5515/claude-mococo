@@ -70,6 +70,10 @@ Content: ${invocation.message.content}
 ${repoList}
 ${repoRules}
 
+${team.isLeader ? `## Task Channels
+- Create: \`[task:create name @Bot1 @Bot2]\`
+- Archive: \`[task:done name]\`
+` : ''}
 ## Your Identity
 You are: ${team.name} (engine: ${team.engine}, model: ${team.model})
 ${team.useTeams ? `

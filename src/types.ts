@@ -57,6 +57,8 @@ export interface TeamInvocation {
 export interface EnvConfig {
   workChannelId?: string;
   hookPort: number;
+  tasksCategoryId?: string;   // Discord category for active task channels
+  archiveCategoryId?: string; // Discord category for archived task channels
 }
 
 export interface HookEvent {
