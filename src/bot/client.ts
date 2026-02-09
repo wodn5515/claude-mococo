@@ -108,6 +108,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       if (team.isLeader) {
         if (await handleAdminCommand(content, msg, config)) return;
 
+        // Check if message @mentions a specific non-leader bot via Discord
+        const mentionsOtherBot = Object.values(config.teams).some(t =>
+          !t.isLeader && t.discordUserId && msg.mentions.users.has(t.discordUserId)
+        );
+
         // Record human message
         const humanMsg: ConversationMessage = {
           teamId: 'human',
@@ -119,7 +124,10 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         };
         addMessage(msg.channelId, humanMsg);
 
-        // Route: if message mentions specific teams, invoke them; otherwise invoke Leader
+        // If user @mentioned a specific bot, let that bot's own handler deal with it
+        if (mentionsOtherBot) return;
+
+        // Route: if message mentions specific teams by name, invoke them; otherwise invoke Leader
         const targetTeams = routeMessage(content, true, config);
         for (const target of targetTeams) {
           handleTeamInvocation(target, humanMsg, msg.channelId, config, env);
