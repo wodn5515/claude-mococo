@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .mococo/
+.omc/
 repos/*
 !repos/.gitkeep
 *.log
