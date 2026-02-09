@@ -55,7 +55,10 @@ ${conversationText}
 \`\`\`
 
 ## Discord Mentions
-**ALWAYS start every message with \`<@ID>\` of the person you are responding to.** This is mandatory — no exceptions. If responding to a human, tag the human. If responding to another bot, tag that bot.
+When tagging someone, **always put \`<@ID>\` at the very beginning of your message.**
+- **Replying to human's question:** Do NOT tag. They already know you're talking to them.
+- **Reporting to human proactively** (status update, task done, asking a question): Tag with \`<@ID>\`.
+- **Handing off to another bot or addressing a bot:** ALWAYS tag with \`<@ID>\`.
 Example: \`<@123456> 회장님, 작업 완료했습니다.\`
 ${config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : ''}${invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>` : ''}
 
