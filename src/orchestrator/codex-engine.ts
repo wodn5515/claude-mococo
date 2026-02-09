@@ -11,6 +11,7 @@ export class CodexEngine extends BaseEngine {
     this.proc = spawn('codex', [
       '--quiet',
       '--full-auto',
+      '--model', this.opts.model,
       '-p', this.opts.prompt,
     ], {
       cwd: this.opts.cwd,
