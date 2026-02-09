@@ -68,5 +68,8 @@ ${repoRules}
 
 ## Your Identity
 You are: ${team.name} (engine: ${team.engine}, model: ${team.model})
+${team.useTeams ? `
+## Agent Teams
+You have agent team capabilities enabled. For complex tasks that involve multiple files, parallel work, or multi-step operations, you SHOULD use the team/swarm tools to spawn sub-agents and coordinate work in parallel. This improves speed and quality. For simple single-file tasks, work directly without spawning a team.` : ''}
 `;
 }

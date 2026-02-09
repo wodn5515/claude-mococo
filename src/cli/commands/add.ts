@@ -79,6 +79,7 @@ export async function runAdd(): Promise<void> {
   const bossTitle = await ask('What should this bot call you? (e.g. Boss, Sir)', '');
 
   const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
+  const useTeams = await confirm('Enable agent team mode (parallel sub-agents for complex tasks)?', false);
 
   // --- Engine ---
   console.log('\n── Engine ──');
@@ -127,6 +128,7 @@ export async function runAdd(): Promise<void> {
     maxBudget,
     prompt: `prompts/${id}.md`,
     ...(isLeader ? { isLeader: true } : {}),
+    ...(useTeams ? { useTeams: true } : {}),
     ...(channels.length > 0 ? { channels } : {}),
     git: { name: gitName, email: gitEmail },
     permissions,
