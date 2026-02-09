@@ -55,8 +55,8 @@ ${conversationText}
 \`\`\`
 
 ## Discord Mentions
-To tag someone in Discord, use \`<@ID>\`. Only tag when you need their attention (e.g. handing off work, asking a question, reporting results).
-${invocation.message.discordId ? `- Human: <@${invocation.message.discordId}> (only tag when reporting or asking a question)` : ''}
+To tag someone in Discord, use \`<@ID>\`. Tag when addressing someone directly.
+${config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : ''}${invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>` : ''}
 
 ## The Message That Triggered You
 From: ${invocation.message.teamId === 'human' ? `Human (<@${invocation.message.discordId ?? ''}>)` : invocation.message.teamName}

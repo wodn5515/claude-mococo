@@ -55,6 +55,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
     globalDeny: raw.globalDeny ?? [],
     conversationWindow: raw.conversationWindow ?? 30,
     workspacePath,
+    humanDiscordId: raw.humanDiscordId,
   };
 }
 

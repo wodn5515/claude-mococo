@@ -33,6 +33,7 @@ export interface TeamsConfig {
   globalDeny: string[];
   conversationWindow: number;
   workspacePath: string;
+  humanDiscordId?: string;
 }
 
 export interface ConversationMessage {

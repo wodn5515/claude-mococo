@@ -33,13 +33,17 @@ export async function runInit(): Promise<void> {
   console.log('Initializing mococo workspace...\n');
 
   const channelId = await ask('Discord work channel ID (leave empty for all channels)');
+  const humanId = await ask('Your Discord user ID (right-click your name → Copy User ID)');
 
   // teams.json
-  const teamsJson = {
+  const teamsJson: Record<string, unknown> = {
     teams: {},
     globalDeny: ['gh pr merge', 'git push --force main', 'git push --force master'],
     conversationWindow: 30,
   };
+  if (humanId) {
+    teamsJson.humanDiscordId = humanId;
+  }
   fs.writeFileSync(path.join(cwd, 'teams.json'), JSON.stringify(teamsJson, null, 2) + '\n');
 
   // .env
