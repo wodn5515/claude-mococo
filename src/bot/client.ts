@@ -196,6 +196,7 @@ async function handleTeamInvocation(
   }
 
   markBusy(team.id, triggerMsg.content.slice(0, 50));
+  console.log(`[${team.name}] Invoking (trigger: ${triggerMsg.content.slice(0, 80)})`);
 
   try {
     const conversation = getRecentConversation(channelId, config.conversationWindow);
@@ -211,6 +212,8 @@ async function handleTeamInvocation(
       message: triggerMsg,
       conversation,
     }, config);
+
+    console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)})`);
 
     if (result.output) {
       await sendAsTeam(channelId, team, result.output);
@@ -234,6 +237,7 @@ async function handleTeamInvocation(
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[${team.name}] Error: ${errorMsg}`);
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
     markFree(team.id);
