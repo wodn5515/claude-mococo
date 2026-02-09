@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { formatConversation } from '../teams/context.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
@@ -7,7 +8,8 @@ export async function buildTeamPrompt(
   invocation: TeamInvocation,
   config: TeamsConfig,
 ): Promise<string> {
-  const template = fs.readFileSync(team.prompt, 'utf-8');
+  const ws = config.workspacePath;
+  const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
   const conversationText = formatConversation(invocation.conversation);
 
   // Dynamic Team Directory — auto-generated from teams.json
@@ -23,7 +25,7 @@ export async function buildTeamPrompt(
   let repoRules = '';
   const repoMatch = invocation.message.content.match(/repos\/(\S+)/);
   if (repoMatch) {
-    const repoRulesPath = `prompts/repo-specific/${repoMatch[1]}.md`;
+    const repoRulesPath = path.resolve(ws, `prompts/repo-specific/${repoMatch[1]}.md`);
     if (fs.existsSync(repoRulesPath)) {
       repoRules = `\n\n## Repository-Specific Rules\n${fs.readFileSync(repoRulesPath, 'utf-8')}`;
     }
@@ -32,7 +34,7 @@ export async function buildTeamPrompt(
   // List available repos
   let repos: string[] = [];
   try {
-    repos = fs.readdirSync('repos').filter(f => f !== '.gitkeep');
+    repos = fs.readdirSync(path.resolve(ws, 'repos')).filter(f => f !== '.gitkeep');
   } catch {
     // repos dir may not exist
   }

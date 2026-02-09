@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import type { TeamsConfig, TeamConfig } from './types.js';
 
 const AVATAR_MAP: Record<string, string> = {
@@ -13,8 +14,9 @@ const AVATAR_MAP: Record<string, string> = {
   book: 'https://em-content.zobj.net/source/apple/391/books_1f4da.png',
 };
 
-export function loadTeamsConfig(): TeamsConfig {
-  const raw = JSON.parse(fs.readFileSync('teams.json', 'utf-8'));
+export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsConfig {
+  const teamsJsonPath = path.resolve(workspacePath, 'teams.json');
+  const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
   const teams: Record<string, TeamConfig> = {};
 
   for (const [id, cfg] of Object.entries(raw.teams as Record<string, any>)) {
@@ -50,6 +52,7 @@ export function loadTeamsConfig(): TeamsConfig {
     teams,
     globalDeny: raw.globalDeny ?? [],
     conversationWindow: raw.conversationWindow ?? 30,
+    workspacePath,
   };
 }
 

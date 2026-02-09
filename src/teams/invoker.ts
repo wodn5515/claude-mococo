@@ -19,7 +19,7 @@ export async function invokeTeam(
 
   const engine = createEngine(team.engine, {
     prompt,
-    cwd: process.cwd(),
+    cwd: config.workspacePath,
     model: team.model,
     maxBudget: team.maxBudget,
     teamId: team.id,

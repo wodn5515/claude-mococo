@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { Client, GatewayIntentBits, type TextChannel, type Message } from 'discord.js';
 import { routeMessage, findMentionedTeams } from './router.js';
 import { invokeTeam } from '../teams/invoker.js';
@@ -159,7 +160,7 @@ async function handleAdminCommand(
   if (content === '!repos') {
     let repos: string[] = [];
     try {
-      repos = fs.readdirSync('repos').filter(f => f !== '.gitkeep');
+      repos = fs.readdirSync(path.resolve(config.workspacePath, 'repos')).filter(f => f !== '.gitkeep');
     } catch {}
     await msg.reply(repos.map(r => `- **${r}**`).join('\n') || 'No repos linked.');
     return true;

@@ -30,6 +30,7 @@ export interface TeamsConfig {
   teams: Record<string, TeamConfig>;
   globalDeny: string[];
   conversationWindow: number;
+  workspacePath: string;
 }
 
 export interface ConversationMessage {
