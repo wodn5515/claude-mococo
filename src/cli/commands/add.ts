@@ -81,6 +81,18 @@ export async function runAdd(): Promise<void> {
   const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
   const useTeams = await confirm('Enable agent team mode (parallel sub-agents for complex tasks)?', false);
 
+  let teamRules: string[] = [];
+  if (useTeams) {
+    console.log('Team rules (comma-separated). Examples:');
+    console.log('  "Spawn a tester agent for every code change"');
+    console.log('  "Use max 3 sub-agents, one for code, one for tests, one for docs"');
+    console.log('  "Sub-agents must write TypeScript with strict mode"');
+    const teamRulesStr = await ask('  Team rules', '');
+    teamRules = teamRulesStr
+      ? teamRulesStr.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+  }
+
   // --- Engine ---
   console.log('\n── Engine ──');
   const engine = await choose('Engine:', ['claude', 'codex', 'gemini'], 0);
@@ -129,6 +141,7 @@ export async function runAdd(): Promise<void> {
     prompt: `prompts/${id}.md`,
     ...(isLeader ? { isLeader: true } : {}),
     ...(useTeams ? { useTeams: true } : {}),
+    ...(teamRules.length > 0 ? { teamRules } : {}),
     ...(channels.length > 0 ? { channels } : {}),
     git: { name: gitName, email: gitEmail },
     permissions,

@@ -41,6 +41,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
       channels: cfg.channels,
       discordUserId: cfg.discordUserId,
       useTeams: cfg.useTeams ?? false,
+      teamRules: cfg.teamRules,
       git: cfg.git ?? {
         name: `${cfg.name} (mococo)`,
         email: `mococo-${id}@users.noreply.github.com`,

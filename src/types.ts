@@ -20,6 +20,7 @@ export interface TeamConfig {
   channels?: string[];   // channel IDs — empty/omitted = all channels
   discordUserId?: string; // auto-populated on first login
   useTeams?: boolean;     // enable agent team mode for complex tasks
+  teamRules?: string[];   // rules for how sub-agents are created and behave
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
   githubToken: string;          // each team has its own GitHub account
