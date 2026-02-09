@@ -25,17 +25,31 @@ export class CodexEngine extends BaseEngine {
     stdoutRl.on('line', (line) => {
       try {
         const event = JSON.parse(line);
-        // Capture the last assistant message as output
+        console.log(`[codex:${this.opts.teamId}] event: ${JSON.stringify(event).slice(0, 300)}`);
+        // Try multiple formats to capture the final assistant message
         if (event.type === 'message' && event.role === 'assistant') {
-          lastMessage = typeof event.content === 'string'
+          const text = typeof event.content === 'string'
             ? event.content
             : Array.isArray(event.content)
-              ? event.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+              ? event.content.filter((c: any) => c.type === 'text' || c.type === 'output_text').map((c: any) => c.text).join('\n')
               : '';
+          if (text) lastMessage = text;
+        }
+        // Also check for response/output fields
+        if (event.type === 'response' && event.output) {
+          lastMessage = typeof event.output === 'string' ? event.output : JSON.stringify(event.output);
+        }
+        if (event.message) {
+          const msg = typeof event.message === 'string' ? event.message : '';
+          if (msg) lastMessage = msg;
         }
       } catch {
-        // non-JSON line
-        console.log(`[codex:${this.opts.teamId}] stdout: ${line.slice(0, 200)}`);
+        // non-JSON line — might be plain text output
+        const trimmed = line.trim();
+        if (trimmed) {
+          console.log(`[codex:${this.opts.teamId}] text: ${trimmed.slice(0, 200)}`);
+          lastMessage = trimmed;
+        }
       }
     });
 
