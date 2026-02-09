@@ -54,8 +54,8 @@ ${conversationText}
 \`\`\`
 
 ## Discord Mentions
-When you want to tag/mention someone in your response, use the Discord mention format \`<@ID>\`.
-${invocation.message.discordId ? `- Human: <@${invocation.message.discordId}>` : ''}
+To tag someone in Discord, use \`<@ID>\`. Only tag when you need their attention (e.g. handing off work, asking a question, reporting results).
+${invocation.message.discordId ? `- Human: <@${invocation.message.discordId}> (only tag when reporting or asking a question)` : ''}
 
 ## The Message That Triggered You
 From: ${invocation.message.teamId === 'human' ? `Human (<@${invocation.message.discordId ?? ''}>)` : invocation.message.teamName}
