@@ -49,7 +49,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     const team = event.mococo_team ? config.teams[event.mococo_team as string] : null;
     if (!team) return;
 
-    if (event.hook_event_name === 'SubagentCompleted') {
+    if (event.hook_event_name === 'SubagentCompleted' && env.workChannelId) {
       await sendAsTeam(env.workChannelId, team,
         `Subtask done: **${event.task_subject ?? 'unknown'}** (${(event.teammate_name as string) ?? 'lead'})`
       ).catch(() => {});
@@ -80,7 +80,8 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 
     // Message handler for this team's bot
     client.on('messageCreate', async (msg: Message) => {
-      if (msg.channelId !== env.workChannelId) return;
+      // Per-team channel filter: if channels are specified, only respond in those
+      if (team.channels && team.channels.length > 0 && !team.channels.includes(msg.channelId)) return;
 
       // Ignore messages from ANY of our team bots
       if (botUserIds.has(msg.author.id)) return;

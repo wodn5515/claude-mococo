@@ -38,6 +38,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
       maxBudget: cfg.maxBudget ?? 10,
       prompt: cfg.prompt,
       isLeader: cfg.isLeader ?? false,
+      channels: cfg.channels,
       git: cfg.git ?? {
         name: `${cfg.name} (mococo)`,
         email: `mococo-${id}@users.noreply.github.com`,

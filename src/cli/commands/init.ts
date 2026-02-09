@@ -32,7 +32,7 @@ export async function runInit(): Promise<void> {
 
   console.log('Initializing mococo workspace...\n');
 
-  const channelId = await ask('Discord work channel ID');
+  const channelId = await ask('Discord work channel ID (leave empty for all channels)');
 
   // teams.json
   const teamsJson = {

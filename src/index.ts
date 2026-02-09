@@ -7,13 +7,12 @@ import type { EnvConfig } from './types.js';
 async function main() {
   const config = loadTeamsConfig();
   const env: EnvConfig = {
-    workChannelId: process.env.WORK_CHANNEL_ID!,
+    workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
   };
 
   if (!env.workChannelId) {
-    console.error('WORK_CHANNEL_ID is required. Copy .env.example to .env and fill it in.');
-    process.exit(1);
+    console.log('WORK_CHANNEL_ID not set — bot will respond in all channels.');
   }
 
   // Check how many teams have Discord tokens configured

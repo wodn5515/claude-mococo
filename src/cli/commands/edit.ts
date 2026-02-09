@@ -28,6 +28,7 @@ const EDIT_FIELDS = [
   'role       — Role and prompt (regenerate)',
   'engine     — Engine and model',
   'budget     — Max budget',
+  'channels   — Channel restrictions',
   'permissions — Permission preset',
   'git        — Git author identity',
   'all        — Edit everything',
@@ -107,6 +108,22 @@ export async function runEdit(id: string): Promise<void> {
   if (editAll || field === 'budget') {
     const budgetStr = await ask('Max budget per invocation ($)', String(team.maxBudget ?? 10));
     team.maxBudget = parseFloat(budgetStr) || 10;
+  }
+
+  // Channels
+  if (editAll || field === 'channels') {
+    const current = (team.channels ?? []).join(', ');
+    console.log(`Current channels: ${current || '(all channels)'}`);
+    console.log('Channel IDs (comma-separated, empty = all channels):');
+    const channelsStr = await ask('  Channels', current);
+    const channels = channelsStr
+      ? channelsStr.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [];
+    if (channels.length > 0) {
+      team.channels = channels;
+    } else {
+      delete team.channels;
+    }
   }
 
   // Permissions

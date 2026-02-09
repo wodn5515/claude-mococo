@@ -15,13 +15,12 @@ export async function runStart(): Promise<void> {
   const config = loadTeamsConfig(ws);
 
   const env: EnvConfig = {
-    workChannelId: process.env.WORK_CHANNEL_ID!,
+    workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
   };
 
   if (!env.workChannelId) {
-    console.error('WORK_CHANNEL_ID is required. Set it in .env');
-    process.exit(1);
+    console.log('WORK_CHANNEL_ID not set — bot will respond in all channels.');
   }
 
   const teamsWithTokens = Object.values(config.teams).filter(t => t.discordToken);

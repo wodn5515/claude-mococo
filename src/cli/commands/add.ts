@@ -90,6 +90,14 @@ export async function runAdd(): Promise<void> {
   const discordToken = await ask('Discord bot token');
   const githubToken = await ask('GitHub PAT (optional, press enter to skip)');
 
+  // --- Channels ---
+  console.log('\n── Channels ──');
+  console.log('Channel IDs this bot responds in (comma-separated, empty = all channels):');
+  const channelsStr = await ask('  Channels', '');
+  const channels = channelsStr
+    ? channelsStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
   // --- Permissions ---
   console.log('\n── Permissions ──');
   const presetNames = Object.keys(PERMISSION_PRESETS);
@@ -117,6 +125,7 @@ export async function runAdd(): Promise<void> {
     maxBudget,
     prompt: `prompts/${id}.md`,
     ...(isLeader ? { isLeader: true } : {}),
+    ...(channels.length > 0 ? { channels } : {}),
     git: { name: gitName, email: gitEmail },
     permissions,
   };

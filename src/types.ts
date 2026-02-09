@@ -17,6 +17,7 @@ export interface TeamConfig {
   maxBudget: number;
   prompt: string;
   isLeader?: boolean;
+  channels?: string[];   // channel IDs — empty/omitted = all channels
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
   githubToken: string;          // each team has its own GitHub account
@@ -49,7 +50,7 @@ export interface TeamInvocation {
 }
 
 export interface EnvConfig {
-  workChannelId: string;
+  workChannelId?: string;
   hookPort: number;
 }
 
