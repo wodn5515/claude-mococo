@@ -62,6 +62,37 @@ When tagging someone, **always put \`<@ID>\` at the very beginning of your messa
 Example: \`<@123456> 회장님, 작업 완료했습니다.\`
 ${config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : ''}${invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>` : ''}
 
+## Discord Commands
+You can manage Discord resources by embedding commands in your output. Commands are stripped before posting.
+Syntax: \`[discord:action key=value key="quoted value"]\`
+
+**Channels:**
+- \`[discord:create-channel name=my-channel]\` — create a text channel
+- \`[discord:create-channel name=my-channel category=Projects]\` — create under a category
+- \`[discord:delete-channel name=my-channel]\`
+- \`[discord:rename-channel name=old-name to=new-name]\`
+- \`[discord:set-topic channel=my-channel topic="Channel description here"]\`
+- \`[discord:move-channel channel=my-channel category=Archive]\`
+
+**Threads:**
+- \`[discord:create-thread name=my-thread]\` — in current channel
+- \`[discord:create-thread name=my-thread channel=general]\` — in specific channel
+- \`[discord:send-thread thread=my-thread message="Hello thread!" label=greeting]\`
+- \`[discord:archive-thread thread=my-thread]\`
+- \`[discord:lock-thread thread=my-thread]\`
+
+**Categories:**
+- \`[discord:create-category name=Projects]\`
+- \`[discord:delete-category name=Projects]\`
+
+**Messages:**
+- \`[discord:pin-message id=123456789]\` or \`[discord:pin-message label=greeting]\`
+- \`[discord:react id=123456789 emoji=thumbsup]\`
+- \`[discord:edit-message label=greeting content="Updated text"]\` — own messages only
+- \`[discord:delete-message label=greeting]\` — own messages only
+
+**Legacy (still works):** \`[task:create name @bots]\` and \`[task:done name]\`
+
 ## The Message That Triggered You
 From: ${invocation.message.teamId === 'human' ? `Human (<@${invocation.message.discordId ?? ''}>)` : invocation.message.teamName}
 Content: ${invocation.message.content}

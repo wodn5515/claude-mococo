@@ -1,18 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Client, ChannelType, GatewayIntentBits, type TextChannel, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, type TextChannel, type Message } from 'discord.js';
 import { routeMessage, findMentionedTeams } from './router.js';
 import { invokeTeam } from '../teams/invoker.js';
 import { addMessage, getRecentConversation } from '../teams/context.js';
 import { isBusy, markBusy, markFree, waitForFree, getStatus } from '../teams/concurrency.js';
 import { hookEvents } from '../server/hook-receiver.js';
+import { processDiscordCommands, ResourceRegistry } from './discord-commands.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '../types.js';
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
-const teamClients = new Map<string, Client>();
+export const teamClients = new Map<string, Client>();
+
+// Shared resource registry for discord command name→id resolution
+const registry = new ResourceRegistry();
 
 /** Send a message as a specific team using that team's own Discord bot */
-async function sendAsTeam(channelId: string, team: TeamConfig, content: string) {
+export async function sendAsTeam(channelId: string, team: TeamConfig, content: string) {
   const client = teamClients.get(team.id);
   if (!client) return;
 
@@ -192,120 +196,6 @@ async function handleAdminCommand(
   return false;
 }
 
-// Track task channels: channelName → channelId
-const taskChannels = new Map<string, string>();
-
-/** Create a task channel under the Tasks category */
-async function createTaskChannel(
-  name: string,
-  sourceChannelId: string,
-  config: TeamsConfig,
-  env: EnvConfig,
-): Promise<string | null> {
-  if (!env.tasksCategoryId) {
-    console.warn('TASKS_CATEGORY_ID not set — cannot create task channels');
-    return null;
-  }
-
-  // Use the leader's client to create channels
-  const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
-  if (!leaderTeam) return null;
-  const client = teamClients.get(leaderTeam.id);
-  if (!client) return null;
-
-  const sourceChannel = client.channels.cache.get(sourceChannelId) as TextChannel | undefined;
-  if (!sourceChannel?.guild) return null;
-
-  try {
-    const channel = await sourceChannel.guild.channels.create({
-      name: `task-${name}`,
-      type: ChannelType.GuildText,
-      parent: env.tasksCategoryId,
-    });
-    taskChannels.set(name, channel.id);
-    console.log(`[task] Created #task-${name} (${channel.id})`);
-    return channel.id;
-  } catch (err) {
-    console.error(`[task] Failed to create channel: ${err instanceof Error ? err.message : err}`);
-    return null;
-  }
-}
-
-/** Archive a task channel by moving it to the Archive category */
-async function archiveTaskChannel(
-  name: string,
-  config: TeamsConfig,
-  env: EnvConfig,
-): Promise<boolean> {
-  if (!env.archiveCategoryId) {
-    console.warn('ARCHIVE_CATEGORY_ID not set — cannot archive channels');
-    return false;
-  }
-
-  const channelId = taskChannels.get(name);
-  if (!channelId) {
-    console.warn(`[task] No task channel found for "${name}"`);
-    return false;
-  }
-
-  const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
-  if (!leaderTeam) return false;
-  const client = teamClients.get(leaderTeam.id);
-  if (!client) return false;
-
-  try {
-    const channel = client.channels.cache.get(channelId) as TextChannel | undefined;
-    if (channel) {
-      await channel.setParent(env.archiveCategoryId);
-      taskChannels.delete(name);
-      console.log(`[task] Archived #task-${name}`);
-      return true;
-    }
-  } catch (err) {
-    console.error(`[task] Failed to archive channel: ${err instanceof Error ? err.message : err}`);
-  }
-  return false;
-}
-
-/** Parse and execute task commands from bot output, return cleaned output */
-async function processTaskCommands(
-  output: string,
-  channelId: string,
-  team: TeamConfig,
-  config: TeamsConfig,
-  env: EnvConfig,
-): Promise<string> {
-  let cleaned = output;
-
-  // [task:create task-name @Bot1 @Bot2]
-  const createMatch = output.match(/\[task:create\s+(\S+)([^\]]*)\]/i);
-  if (createMatch) {
-    const taskName = createMatch[1];
-    const newChannelId = await createTaskChannel(taskName, channelId, config, env);
-    if (newChannelId) {
-      // Notify in the original channel
-      await sendAsTeam(channelId, team, `Task channel created: <#${newChannelId}>`);
-      // Post the task context in the new channel
-      const mentioned = createMatch[2]?.trim() || '';
-      await sendAsTeam(newChannelId, team, `Task **${taskName}** started. Assigned: ${mentioned || 'all'}`);
-    }
-    cleaned = cleaned.replace(createMatch[0], '').trim();
-  }
-
-  // [task:done task-name]
-  const doneMatch = output.match(/\[task:done\s+(\S+)\]/i);
-  if (doneMatch) {
-    const taskName = doneMatch[1];
-    const archived = await archiveTaskChannel(taskName, config, env);
-    if (archived) {
-      await sendAsTeam(channelId, team, `Task **${taskName}** completed and channel archived.`);
-    }
-    cleaned = cleaned.replace(doneMatch[0], '').trim();
-  }
-
-  return cleaned;
-}
-
 async function handleTeamInvocation(
   team: TeamConfig,
   triggerMsg: ConversationMessage,
@@ -337,10 +227,24 @@ async function handleTeamInvocation(
 
     console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)})`);
 
-    // Process task commands (create/archive channels) and clean output
+    // Process discord commands (channels, threads, categories, messages) and clean output
     let finalOutput = result.output;
     if (finalOutput) {
-      finalOutput = await processTaskCommands(finalOutput, channelId, team, config, env);
+      // Resolve guild from the channel
+      const guildClient = teamClients.get(team.id);
+      const guildChannel = guildClient?.channels.cache.get(channelId) as TextChannel | undefined;
+      if (guildChannel?.guild) {
+        finalOutput = await processDiscordCommands(finalOutput, {
+          guild: guildChannel.guild,
+          team,
+          config,
+          env,
+          registry,
+          channelId,
+          teamClients,
+          sendAsTeam,
+        });
+      }
     }
 
     if (finalOutput) {
