@@ -58,23 +58,22 @@ function parseCommands(output: string): ParsedCommand[] {
     commands.push({ raw, action, params });
   }
 
+  // Block syntax: run against original text (not masked) since bots wrap these in code fences
+  // Also strip surrounding code fences if present
+  const blockSource = output.replace(/```\s*\n(\[discord:edit-(?:persona|memory)\])/g, '$1')
+    .replace(/(---END-(?:PERSONA|MEMORY)---)\s*\n```/g, '$1');
+
   // Block syntax: [discord:edit-persona] + ---PERSONA---\n...\n---END-PERSONA---
   const personaRe = /\[discord:edit-persona\]\s*\n---PERSONA---\n([\s\S]*?)\n---END-PERSONA---/g;
-  while ((match = personaRe.exec(masked)) !== null) {
-    const raw = output.slice(match.index, match.index + match[0].length);
-    // Extract content from original (not masked) text using positional offsets
-    const contentOffset = match.index + match[0].indexOf(match[1]);
-    const content = output.slice(contentOffset, contentOffset + match[1].length);
-    commands.push({ raw, action: 'edit-persona', params: { _content: content } });
+  while ((match = personaRe.exec(blockSource)) !== null) {
+    commands.push({ raw: match[0], action: 'edit-persona', params: { _content: match[1] } });
   }
 
   // Block syntax: [discord:edit-memory] + ---MEMORY---\n...\n---END-MEMORY---
-  const memoryRe = /\[discord:edit-memory\]\s*\n---MEMORY---\n([\s\S]*?)\n---END-MEMORY---/g;
-  while ((match = memoryRe.exec(masked)) !== null) {
-    const raw = output.slice(match.index, match.index + match[0].length);
-    const contentOffset = match.index + match[0].indexOf(match[1]);
-    const content = output.slice(contentOffset, contentOffset + match[1].length);
-    commands.push({ raw, action: 'edit-memory', params: { _content: content } });
+  // Also match bare ---MEMORY--- blocks without the [discord:edit-memory] prefix
+  const memoryRe = /(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---/g;
+  while ((match = memoryRe.exec(blockSource)) !== null) {
+    commands.push({ raw: match[0], action: 'edit-memory', params: { _content: match[1] } });
   }
 
   // Legacy: [task:create name @bots...]
@@ -141,7 +140,15 @@ export async function processDiscordCommands(
   let cleaned = output;
   for (const cmd of commands) {
     await executeCommand(cmd, ctx);
-    cleaned = cleaned.replace(cmd.raw, '');
+    // Try stripping the raw match; also strip code-fenced version for block commands
+    if (cleaned.includes(cmd.raw)) {
+      cleaned = cleaned.replace(cmd.raw, '');
+    } else {
+      // Block command was inside code fences — build a pattern to match the fenced version
+      const escaped = cmd.raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const fencedRe = new RegExp('```\\s*\\n?' + escaped + '\\s*\\n?```', 's');
+      cleaned = cleaned.replace(fencedRe, '');
+    }
   }
 
   return cleaned.replace(/\n{3,}/g, '\n\n').trim();
