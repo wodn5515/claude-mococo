@@ -20,10 +20,14 @@ ${inboxContent}`;
 function runClaudeSummary(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', [
-      '-p', prompt,
+      '-p',
       '--model', 'haiku',
       '--max-turns', '1',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    // Pass prompt via stdin to avoid arg length limits
+    child.stdin.write(prompt);
+    child.stdin.end();
 
     let stdout = '';
     let stderr = '';
