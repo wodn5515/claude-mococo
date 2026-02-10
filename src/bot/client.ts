@@ -6,7 +6,7 @@ import { invokeTeam } from '../teams/invoker.js';
 import { addMessage, getRecentConversation } from '../teams/context.js';
 import { isBusy, markBusy, markFree, waitForFree, getStatus } from '../teams/concurrency.js';
 import { hookEvents } from '../server/hook-receiver.js';
-import { processDiscordCommands, ResourceRegistry } from './discord-commands.js';
+import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '../types.js';
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
@@ -231,13 +231,16 @@ async function handleTeamInvocation(
   markBusy(team.id, triggerMsg.content.slice(0, 50));
   console.log(`[${team.name}] Invoking (trigger: ${triggerMsg.content.slice(0, 80)})`);
 
+  // Show typing indicator until the engine finishes
+  const typingClient = teamClients.get(team.id);
+  const typingChannel = typingClient?.channels.cache.get(channelId) as TextChannel | undefined;
+  await typingChannel?.sendTyping().catch(() => {});
+  const typingInterval = setInterval(() => {
+    typingChannel?.sendTyping().catch(() => {});
+  }, 8_000);
+
   try {
     const conversation = getRecentConversation(channelId, config.conversationWindow);
-
-    // Show typing indicator instead of a message
-    const typingClient = teamClients.get(team.id);
-    const typingChannel = typingClient?.channels.cache.get(channelId) as TextChannel | undefined;
-    await typingChannel?.sendTyping().catch(() => {});
 
     const result = await invokeTeam(team, {
       teamId: team.id,
@@ -248,8 +251,13 @@ async function handleTeamInvocation(
 
     console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)})`);
 
-    // Process discord commands (channels, threads, categories, messages) and clean output
+    // Strip memory/persona blocks before anything else (no guild needed)
     let finalOutput = result.output;
+    if (finalOutput) {
+      finalOutput = stripMemoryBlocks(finalOutput);
+    }
+
+    // Process discord commands (channels, threads, categories, messages) and clean output
     if (finalOutput) {
       // Resolve guild from the channel
       const guildClient = teamClients.get(team.id);
@@ -293,6 +301,7 @@ async function handleTeamInvocation(
     console.error(`[${team.name}] Error: ${errorMsg}`);
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
+    clearInterval(typingInterval);
     clearInbox(team.id, config.workspacePath);
     markFree(team.id);
   }

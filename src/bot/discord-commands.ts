@@ -4,6 +4,20 @@ import { ChannelType, type Guild, type TextChannel, type Client, type Message } 
 import type { TeamConfig, TeamsConfig, EnvConfig } from '../types.js';
 
 // ---------------------------------------------------------------------------
+// Strip memory/persona blocks — can be called without guild context
+// ---------------------------------------------------------------------------
+
+export function stripMemoryBlocks(output: string): string {
+  return output
+    .replace(/```\s*\n?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n[\s\S]*?\n---END-MEMORY---\s*\n?```/g, '')
+    .replace(/(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n[\s\S]*?\n---END-MEMORY---/g, '')
+    .replace(/```\s*\n?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n[\s\S]*?\n---END-PERSONA---\s*\n?```/g, '')
+    .replace(/(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n[\s\S]*?\n---END-PERSONA---/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
 // A. Resource Registry — in-memory name→id maps per resource type
 // ---------------------------------------------------------------------------
 
