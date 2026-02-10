@@ -91,6 +91,16 @@ Syntax: \`[discord:action key=value key="quoted value"]\`
 - \`[discord:edit-message label=greeting content="Updated text"]\` — own messages only
 - \`[discord:delete-message label=greeting]\` — own messages only
 
+**Persona (self-edit):**
+When asked to update your persona/personality/character, output the command tag followed by a delimited block:
+\`\`\`
+[discord:edit-persona]
+---PERSONA---
+(your full updated persona here)
+---END-PERSONA---
+\`\`\`
+This rewrites your persona file. Include your ENTIRE persona — anything omitted will be lost.
+
 **Legacy (still works):** \`[task:create name @bots]\` and \`[task:done name]\`
 
 ## The Message That Triggered You

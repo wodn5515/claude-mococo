@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { ChannelType, type Guild, type TextChannel, type Client, type Message } from 'discord.js';
 import type { TeamConfig, TeamsConfig, EnvConfig } from '../types.js';
 
@@ -54,6 +56,16 @@ function parseCommands(output: string): ParsedCommand[] {
     const action = match[1];
     const params = parseParams(match[2]);
     commands.push({ raw, action, params });
+  }
+
+  // Block syntax: [discord:edit-persona] + ---PERSONA---\n...\n---END-PERSONA---
+  const personaRe = /\[discord:edit-persona\]\s*\n---PERSONA---\n([\s\S]*?)\n---END-PERSONA---/g;
+  while ((match = personaRe.exec(masked)) !== null) {
+    const raw = output.slice(match.index, match.index + match[0].length);
+    // Extract content from original (not masked) text using positional offsets
+    const contentOffset = match.index + match[0].indexOf(match[1]);
+    const content = output.slice(contentOffset, contentOffset + match[1].length);
+    commands.push({ raw, action: 'edit-persona', params: { _content: content } });
   }
 
   // Legacy: [task:create name @bots...]
@@ -148,6 +160,8 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
       case 'react':           return await handleReact(cmd.params, ctx);
       case 'edit-message':    return await handleEditMessage(cmd.params, ctx);
       case 'delete-message':  return await handleDeleteMessage(cmd.params, ctx);
+      // Persona
+      case 'edit-persona':    return await handleEditPersona(cmd.params, ctx);
       // Legacy alias
       case '_task-done':      return await handleTaskDone(cmd.params, ctx);
       default:
@@ -450,4 +464,16 @@ async function handleTaskDone(params: Record<string, string>, ctx: CommandContex
   ctx.registry.deleteChannel(name);
   await ctx.sendAsTeam(ctx.channelId, ctx.team, `Task **${name}** completed and channel archived.`);
   console.log(`[discord-cmd] Archived task channel "${name}"`);
+}
+
+// --- Persona Handler ---
+
+async function handleEditPersona(params: Record<string, string>, ctx: CommandContext) {
+  const content = params._content;
+  if (!content) return;
+
+  const promptPath = path.resolve(ctx.config.workspacePath, ctx.team.prompt);
+  fs.writeFileSync(promptPath, content);
+  console.log(`[discord-cmd] Updated persona for ${ctx.team.name} at ${ctx.team.prompt}`);
+  await ctx.sendAsTeam(ctx.channelId, ctx.team, `Persona updated.`);
 }
