@@ -1,18 +1,61 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ChannelType, type Guild, type TextChannel, type Client, type Message } from 'discord.js';
+import { ChannelType, PermissionFlagsBits, type Guild, type TextChannel, type Client, type Message } from 'discord.js';
 import type { TeamConfig, TeamsConfig, EnvConfig } from '../types.js';
 
 // ---------------------------------------------------------------------------
-// Strip memory/persona blocks — can be called without guild context
+// Strip memory/persona blocks — extracts content, saves to file, then strips
 // ---------------------------------------------------------------------------
 
-export function stripMemoryBlocks(output: string): string {
+const MEMORY_RE = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---(?:\s*\n?```)?/g;
+const LONG_MEMORY_RE = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?---LONG-MEMORY---\n([\s\S]*?)\n---END-LONG-MEMORY---(?:\s*\n?```)?/g;
+const PERSONA_RE = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n([\s\S]*?)\n---END-PERSONA---(?:\s*\n?```)?/g;
+
+export function stripMemoryBlocks(
+  output: string,
+  teamId?: string,
+  workspacePath?: string,
+): string {
+  // Extract and save memory content before stripping
+  if (teamId && workspacePath) {
+    let match: RegExpExecArray | null;
+    const memDir = path.resolve(workspacePath, '.mococo/memory', teamId);
+
+    // Short-term memory → {teamId}/short-term.md
+    const memRe = new RegExp(MEMORY_RE.source, 'g');
+    while ((match = memRe.exec(output)) !== null) {
+      const content = match[1];
+      if (content) {
+        fs.mkdirSync(memDir, { recursive: true });
+        fs.writeFileSync(path.resolve(memDir, 'short-term.md'), content);
+        console.log(`[strip] Updated short-term memory for ${teamId}`);
+      }
+    }
+
+    // Long-term memory → {teamId}/long-term.md
+    const longMemRe = new RegExp(LONG_MEMORY_RE.source, 'g');
+    while ((match = longMemRe.exec(output)) !== null) {
+      const content = match[1];
+      if (content) {
+        fs.mkdirSync(memDir, { recursive: true });
+        fs.writeFileSync(path.resolve(memDir, 'long-term.md'), content);
+        console.log(`[strip] Updated long-term memory for ${teamId}`);
+      }
+    }
+
+    const personaRe = new RegExp(PERSONA_RE.source, 'g');
+    while ((match = personaRe.exec(output)) !== null) {
+      const content = match[1];
+      if (content) {
+        // Persona update needs the prompt path — skip here, handled by processDiscordCommands
+      }
+    }
+  }
+
   return output
-    .replace(/```\s*\n?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n[\s\S]*?\n---END-MEMORY---\s*\n?```/g, '')
-    .replace(/(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n[\s\S]*?\n---END-MEMORY---/g, '')
-    .replace(/```\s*\n?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n[\s\S]*?\n---END-PERSONA---\s*\n?```/g, '')
-    .replace(/(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n[\s\S]*?\n---END-PERSONA---/g, '')
+    .replace(MEMORY_RE, '')
+    .replace(LONG_MEMORY_RE, '')
+    .replace(PERSONA_RE, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -26,6 +69,7 @@ export class ResourceRegistry {
   private threads = new Map<string, string>();
   private categories = new Map<string, string>();
   private messages = new Map<string, string>(); // label→messageId
+  private roles = new Map<string, string>();    // name→roleId
 
   setChannel(name: string, id: string) { this.channels.set(name, id); }
   getChannel(name: string) { return this.channels.get(name); }
@@ -41,6 +85,10 @@ export class ResourceRegistry {
 
   setMessage(label: string, id: string) { this.messages.set(label, id); }
   getMessage(label: string) { return this.messages.get(label); }
+
+  setRole(name: string, id: string) { this.roles.set(name, id); }
+  getRole(name: string) { return this.roles.get(name); }
+  deleteRole(name: string) { this.roles.delete(name); }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,8 +122,8 @@ function parseCommands(output: string): ParsedCommand[] {
 
   // Block syntax: run against original text (not masked) since bots wrap these in code fences
   // Also strip surrounding code fences if present
-  const blockSource = output.replace(/```\s*\n(\[discord:edit-(?:persona|memory)\])/g, '$1')
-    .replace(/(---END-(?:PERSONA|MEMORY)---)\s*\n```/g, '$1');
+  const blockSource = output.replace(/```\s*\n(\[discord:edit-(?:persona|long-memory|memory)\])/g, '$1')
+    .replace(/(---END-(?:PERSONA|LONG-MEMORY|MEMORY)---)\s*\n```/g, '$1');
 
   // Block syntax: [discord:edit-persona] + ---PERSONA---\n...\n---END-PERSONA---
   const personaRe = /\[discord:edit-persona\]\s*\n---PERSONA---\n([\s\S]*?)\n---END-PERSONA---/g;
@@ -88,6 +136,12 @@ function parseCommands(output: string): ParsedCommand[] {
   const memoryRe = /(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---/g;
   while ((match = memoryRe.exec(blockSource)) !== null) {
     commands.push({ raw: match[0], action: 'edit-memory', params: { _content: match[1] } });
+  }
+
+  // Block syntax: [discord:edit-long-memory] + ---LONG-MEMORY---\n...\n---END-LONG-MEMORY---
+  const longMemoryRe = /(?:\[discord:edit-long-memory\]\s*\n)?---LONG-MEMORY---\n([\s\S]*?)\n---END-LONG-MEMORY---/g;
+  while ((match = longMemoryRe.exec(blockSource)) !== null) {
+    commands.push({ raw: match[0], action: 'edit-long-memory', params: { _content: match[1] } });
   }
 
   // Legacy: [task:create name @bots...]
@@ -190,9 +244,18 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
       case 'react':           return await handleReact(cmd.params, ctx);
       case 'edit-message':    return await handleEditMessage(cmd.params, ctx);
       case 'delete-message':  return await handleDeleteMessage(cmd.params, ctx);
+      // Permissions
+      case 'set-permission':    return await handleSetPermission(cmd.params, ctx);
+      case 'remove-permission': return await handleRemovePermission(cmd.params, ctx);
+      // Roles
+      case 'create-role':     return await handleCreateRole(cmd.params, ctx);
+      case 'delete-role':     return await handleDeleteRole(cmd.params, ctx);
+      case 'assign-role':     return await handleAssignRole(cmd.params, ctx);
+      case 'remove-role':     return await handleRemoveRole(cmd.params, ctx);
       // Persona & Memory
       case 'edit-persona':    return await handleEditPersona(cmd.params, ctx);
       case 'edit-memory':     return await handleEditMemory(cmd.params, ctx);
+      case 'edit-long-memory': return await handleEditLongMemory(cmd.params, ctx);
       // Legacy alias
       case '_task-done':      return await handleTaskDone(cmd.params, ctx);
       default:
@@ -241,6 +304,12 @@ function resolveMessageId(idOrLabel: string, ctx: CommandContext): string {
   if (/^\d{17,20}$/.test(idOrLabel)) return idOrLabel;
   // Otherwise resolve label from registry
   return ctx.registry.getMessage(idOrLabel) ?? idOrLabel;
+}
+
+function resolveRole(name: string, ctx: CommandContext) {
+  const id = ctx.registry.getRole(name);
+  if (id) return ctx.guild.roles.cache.get(id);
+  return ctx.guild.roles.cache.find(r => r.name === name);
 }
 
 // --- Channel Handlers ---
@@ -497,6 +566,185 @@ async function handleTaskDone(params: Record<string, string>, ctx: CommandContex
   console.log(`[discord-cmd] Archived task channel "${name}"`);
 }
 
+// --- Permission name mapping ---
+
+const PERMISSION_MAP: Record<string, bigint> = {
+  'ViewChannel':        PermissionFlagsBits.ViewChannel,
+  'SendMessages':       PermissionFlagsBits.SendMessages,
+  'ReadMessageHistory': PermissionFlagsBits.ReadMessageHistory,
+  'ManageMessages':     PermissionFlagsBits.ManageMessages,
+  'ManageChannels':     PermissionFlagsBits.ManageChannels,
+  'ManageRoles':        PermissionFlagsBits.ManageRoles,
+  'EmbedLinks':         PermissionFlagsBits.EmbedLinks,
+  'AttachFiles':        PermissionFlagsBits.AttachFiles,
+  'AddReactions':       PermissionFlagsBits.AddReactions,
+  'Connect':            PermissionFlagsBits.Connect,
+  'Speak':              PermissionFlagsBits.Speak,
+  'MentionEveryone':    PermissionFlagsBits.MentionEveryone,
+  'CreatePublicThreads':  PermissionFlagsBits.CreatePublicThreads,
+  'CreatePrivateThreads': PermissionFlagsBits.CreatePrivateThreads,
+  'UseExternalEmojis':  PermissionFlagsBits.UseExternalEmojis,
+};
+
+function parsePermissionNames(str: string): Record<string, boolean> {
+  const result: Record<string, boolean> = {};
+  for (const name of str.split(',').map(s => s.trim()).filter(Boolean)) {
+    const flag = PERMISSION_MAP[name];
+    if (flag !== undefined) {
+      result[String(flag)] = true;
+    } else {
+      console.warn(`[discord-cmd] Unknown permission: ${name}`);
+    }
+  }
+  return result;
+}
+
+// --- Permission Handlers ---
+
+function resolveChannelOrCategory(name: string, ctx: CommandContext) {
+  // Check channel registry
+  const chId = ctx.registry.getChannel(name);
+  if (chId) return ctx.guild.channels.cache.get(chId);
+  // Check category registry
+  const catId = ctx.registry.getCategory(name);
+  if (catId) return ctx.guild.channels.cache.get(catId);
+  // Fallback: search by name (channels and categories)
+  return ctx.guild.channels.cache.find(c => c.name === name);
+}
+
+async function handleSetPermission(params: Record<string, string>, ctx: CommandContext) {
+  const channelName = params.channel ?? params.category;
+  if (!channelName) return;
+
+  const channel = resolveChannelOrCategory(channelName, ctx);
+  if (!channel || !('permissionOverwrites' in channel)) {
+    console.warn(`[discord-cmd] Channel/category "${channelName}" not found or has no permissions`);
+    return;
+  }
+
+  // Resolve target: role or user
+  let targetId: string | undefined;
+  if (params.role) {
+    const role = resolveRole(params.role, ctx);
+    targetId = role?.id;
+    if (!targetId) {
+      console.warn(`[discord-cmd] Role "${params.role}" not found`);
+      return;
+    }
+  } else if (params.user) {
+    targetId = params.user.replace(/[<@!>]/g, '');
+  }
+  if (!targetId) return;
+
+  const allow = params.allow ? parsePermissionNames(params.allow) : {};
+  const deny = params.deny ? parsePermissionNames(params.deny) : {};
+
+  const overwrite: Record<string, boolean | null> = {};
+  for (const [flag] of Object.entries(allow)) overwrite[flag] = true;
+  for (const [flag] of Object.entries(deny)) overwrite[flag] = false;
+
+  await channel.permissionOverwrites.edit(targetId, overwrite, {
+    reason: `Set by ${ctx.team.name}`,
+  });
+
+  const targetLabel = params.role ?? params.user;
+  console.log(`[discord-cmd] Set permissions on "${channelName}" for ${targetLabel}`);
+}
+
+async function handleRemovePermission(params: Record<string, string>, ctx: CommandContext) {
+  const channelName = params.channel ?? params.category;
+  if (!channelName) return;
+
+  const channel = resolveChannelOrCategory(channelName, ctx);
+  if (!channel || !('permissionOverwrites' in channel)) return;
+
+  let targetId: string | undefined;
+  if (params.role) {
+    const role = resolveRole(params.role, ctx);
+    targetId = role?.id;
+  } else if (params.user) {
+    targetId = params.user.replace(/[<@!>]/g, '');
+  }
+  if (!targetId) return;
+
+  await channel.permissionOverwrites.delete(targetId, `Removed by ${ctx.team.name}`);
+
+  const targetLabel = params.role ?? params.user;
+  console.log(`[discord-cmd] Removed permission overwrite on "${channelName}" for ${targetLabel}`);
+}
+
+// --- Role Handlers ---
+
+async function handleCreateRole(params: Record<string, string>, ctx: CommandContext) {
+  const name = params.name;
+  if (!name) return;
+
+  const color = params.color ? (parseInt(params.color.replace('#', ''), 16) || undefined) : undefined;
+
+  const role = await ctx.guild.roles.create({
+    name,
+    color,
+    reason: `Created by ${ctx.team.name}`,
+  });
+  ctx.registry.setRole(name, role.id);
+  console.log(`[discord-cmd] Created role "${name}" (${role.id})`);
+}
+
+async function handleDeleteRole(params: Record<string, string>, ctx: CommandContext) {
+  const name = params.name;
+  if (!name) return;
+  const role = resolveRole(name, ctx);
+  if (!role) return;
+  await role.delete(`Deleted by ${ctx.team.name}`);
+  ctx.registry.deleteRole(name);
+  console.log(`[discord-cmd] Deleted role "${name}"`);
+}
+
+async function handleAssignRole(params: Record<string, string>, ctx: CommandContext) {
+  const roleName = params.role;
+  const userId = params.user;
+  if (!roleName || !userId) return;
+
+  const role = resolveRole(roleName, ctx);
+  if (!role) {
+    console.warn(`[discord-cmd] Role "${roleName}" not found`);
+    return;
+  }
+
+  // Accept raw ID or <@ID> mention format
+  const cleanId = userId.replace(/[<@!>]/g, '');
+  const member = await ctx.guild.members.fetch(cleanId).catch(() => null);
+  if (!member) {
+    console.warn(`[discord-cmd] Member "${userId}" not found`);
+    return;
+  }
+
+  await member.roles.add(role, `Assigned by ${ctx.team.name}`);
+  console.log(`[discord-cmd] Assigned role "${roleName}" to ${member.user.tag}`);
+}
+
+async function handleRemoveRole(params: Record<string, string>, ctx: CommandContext) {
+  const roleName = params.role;
+  const userId = params.user;
+  if (!roleName || !userId) return;
+
+  const role = resolveRole(roleName, ctx);
+  if (!role) {
+    console.warn(`[discord-cmd] Role "${roleName}" not found`);
+    return;
+  }
+
+  const cleanId = userId.replace(/[<@!>]/g, '');
+  const member = await ctx.guild.members.fetch(cleanId).catch(() => null);
+  if (!member) {
+    console.warn(`[discord-cmd] Member "${userId}" not found`);
+    return;
+  }
+
+  await member.roles.remove(role, `Removed by ${ctx.team.name}`);
+  console.log(`[discord-cmd] Removed role "${roleName}" from ${member.user.tag}`);
+}
+
 // --- Persona Handler ---
 
 async function handleEditPersona(params: Record<string, string>, ctx: CommandContext) {
@@ -513,9 +761,18 @@ async function handleEditMemory(params: Record<string, string>, ctx: CommandCont
   const content = params._content;
   if (!content) return;
 
-  const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory');
+  const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory', ctx.team.id);
   fs.mkdirSync(memoryDir, { recursive: true });
-  const memoryPath = path.resolve(memoryDir, `${ctx.team.id}.md`);
-  fs.writeFileSync(memoryPath, content);
-  console.log(`[discord-cmd] Updated memory for ${ctx.team.name}`);
+  fs.writeFileSync(path.resolve(memoryDir, 'short-term.md'), content);
+  console.log(`[discord-cmd] Updated short-term memory for ${ctx.team.name}`);
+}
+
+async function handleEditLongMemory(params: Record<string, string>, ctx: CommandContext) {
+  const content = params._content;
+  if (!content) return;
+
+  const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory', ctx.team.id);
+  fs.mkdirSync(memoryDir, { recursive: true });
+  fs.writeFileSync(path.resolve(memoryDir, 'long-term.md'), content);
+  console.log(`[discord-cmd] Updated long-term memory for ${ctx.team.name}`);
 }

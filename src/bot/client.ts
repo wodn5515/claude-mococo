@@ -92,7 +92,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       ],
     });
 
-    client.on('ready', () => {
+    client.on('clientReady', () => {
       if (client.user) {
         botUserIds.add(client.user.id);
         // Auto-save Discord user ID to teams.json if not already set
@@ -254,7 +254,7 @@ async function handleTeamInvocation(
     // Strip memory/persona blocks before anything else (no guild needed)
     let finalOutput = result.output;
     if (finalOutput) {
-      finalOutput = stripMemoryBlocks(finalOutput);
+      finalOutput = stripMemoryBlocks(finalOutput, team.id, config.workspacePath);
     }
 
     // Process discord commands (channels, threads, categories, messages) and clean output
@@ -288,6 +288,15 @@ async function handleTeamInvocation(
       mentions: findMentionedTeams(result.output, config).map(t => t.id),
     };
     addMessage(channelId, teamMsg);
+
+    // Append this bot's response to all other teams' inboxes
+    if (finalOutput) {
+      for (const otherTeam of Object.values(config.teams)) {
+        if (otherTeam.id !== team.id) {
+          appendToInbox(otherTeam.id, team.name, finalOutput, config.workspacePath);
+        }
+      }
+    }
 
     // If this team's output mentions other teams, invoke them
     const nextTeams = findMentionedTeams(finalOutput, config);

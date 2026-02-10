@@ -3,6 +3,47 @@ import path from 'node:path';
 import { formatConversation } from '../teams/context.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
+const MAX_INBOX_ENTRIES = 20;
+const MAX_ENTRY_CHARS = 200;
+
+/**
+ * Summarize inbox: truncate long messages, keep recent entries,
+ * prioritize messages that mention this team.
+ */
+function summarizeInbox(raw: string, teamId: string): string {
+  if (!raw) return '';
+
+  const lines = raw.split('\n').filter(l => l.trim());
+
+  // Parse into entries (each line is "[timestamp] sender: content")
+  const entries = lines.map(line => {
+    const match = line.match(/^\[([^\]]+)\]\s+([^:]+):\s*([\s\S]*)$/);
+    if (!match) return { ts: '', from: '', content: line, mentionsMe: false };
+    return {
+      ts: match[1],
+      from: match[2],
+      content: match[3],
+      mentionsMe: match[3].toLowerCase().includes(teamId),
+    };
+  });
+
+  // Sort: mentions-me first, then by recency (original order = chronological)
+  const mentioning = entries.filter(e => e.mentionsMe);
+  const others = entries.filter(e => !e.mentionsMe);
+  const sorted = [...mentioning, ...others];
+
+  // Keep only the most recent entries
+  const kept = sorted.slice(-MAX_INBOX_ENTRIES);
+
+  // Format with truncation
+  return kept.map(e => {
+    const truncated = e.content.length > MAX_ENTRY_CHARS
+      ? e.content.slice(0, MAX_ENTRY_CHARS) + '...'
+      : e.content;
+    return e.ts ? `[${e.ts}] ${e.from}: ${truncated}` : truncated;
+  }).join('\n');
+}
+
 export async function buildTeamPrompt(
   team: TeamConfig,
   invocation: TeamInvocation,
@@ -11,6 +52,15 @@ export async function buildTeamPrompt(
   const ws = config.workspacePath;
   const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
   const conversationText = formatConversation(invocation.conversation);
+
+  // Load shared rules (injected for every team)
+  let sharedRules = '';
+  const sharedRulesPath = path.resolve(ws, 'prompts/shared-rules.md');
+  try {
+    sharedRules = fs.readFileSync(sharedRulesPath, 'utf-8').trim();
+  } catch {
+    // no shared rules file — that's fine
+  }
 
   // Dynamic Team Directory — auto-generated from teams.json
   const teamDirectory = Object.values(config.teams)
@@ -43,33 +93,64 @@ export async function buildTeamPrompt(
     ? repos.map(r => `- repos/${r}`).join('\n')
     : '(no repos linked yet)';
 
-  // Load persistent memory file
-  const memoryDir = path.resolve(ws, '.mococo/memory');
-  const memoryPath = path.resolve(memoryDir, `${team.id}.md`);
-  let memory = '';
+  // Load persistent memory (long-term + short-term)
+  const memoryDir = path.resolve(ws, '.mococo/memory', team.id);
+  const longTermPath = path.resolve(memoryDir, 'long-term.md');
+  const shortTermPath = path.resolve(memoryDir, 'short-term.md');
+
+  // Migration: if old flat file exists and new dir doesn't, move it
+  const legacyPath = path.resolve(ws, '.mococo/memory', `${team.id}.md`);
   try {
-    memory = fs.readFileSync(memoryPath, 'utf-8').trim();
+    if (fs.existsSync(legacyPath) && !fs.existsSync(shortTermPath)) {
+      fs.mkdirSync(memoryDir, { recursive: true });
+      fs.renameSync(legacyPath, shortTermPath);
+      console.log(`[memory] Migrated ${team.id}.md → ${team.id}/short-term.md`);
+    }
   } catch {
-    // no memory file yet — that's fine
+    // migration failed — not critical
   }
 
-  // Load inbox (messages received since last invocation)
+  let longTermMemory = '';
+  let shortTermMemory = '';
+  try {
+    longTermMemory = fs.readFileSync(longTermPath, 'utf-8').trim();
+  } catch {
+    // no long-term memory yet
+  }
+  try {
+    shortTermMemory = fs.readFileSync(shortTermPath, 'utf-8').trim();
+  } catch {
+    // no short-term memory yet
+  }
+
+  // Load inbox (messages received since last invocation) and summarize
   const inboxPath = path.resolve(ws, '.mococo/inbox', `${team.id}.md`);
   let inbox = '';
   try {
-    inbox = fs.readFileSync(inboxPath, 'utf-8').trim();
+    inbox = summarizeInbox(
+      fs.readFileSync(inboxPath, 'utf-8').trim(),
+      team.id,
+    );
   } catch {
     // no inbox yet — that's fine
   }
 
   return `${template}
-
-## Your Memory
-Your persistent memory file. This survives across conversations — use it to track ongoing tasks, decisions, context, and anything you need to remember.
-${memory ? `\n${memory}\n` : '\n(empty — nothing saved yet)\n'}
+${sharedRules ? `\n${sharedRules}\n` : ''}
+## Long-term Memory
+Important knowledge that persists permanently. Only update when you have something worth keeping forever: user preferences, project structure, recurring schedules, key decisions, team capabilities.
+${longTermMemory ? `\n${longTermMemory}\n` : '\n(empty)\n'}
+## Short-term Memory
+Working context for current tasks. Update every response:
+- Add new relevant info from inbox and your response
+- Promote important items to long-term memory
+- Delete outdated or useless entries
+- Keep it lean — only what's needed for your next invocation
+${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
 ## Inbox (messages since your last response)
 ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
-**You MUST update your memory at the end of every response** using the edit-memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.
+**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.
+**Always check your memory first before using external tools (APIs, MCP servers).** If the information you need is already here, use it directly. Only call external tools when memory has no relevant data, the data is stale, or the user explicitly asks for fresh data.
 
 ## Team Directory
 These are the teams you can tag. Mention @TeamName to hand off work:
@@ -81,11 +162,11 @@ ${conversationText}
 \`\`\`
 
 ## Discord Mentions
-When tagging someone, **always put \`<@ID>\` at the very beginning of your message.**
-- **Replying to human's question:** Do NOT tag. They already know you're talking to them.
-- **Reporting to human proactively** (status update, task done, asking a question): Tag with \`<@ID>\`.
-- **Handing off to another bot or addressing a bot:** ALWAYS tag with \`<@ID>\`.
-Example: \`<@123456> 회장님, 작업 완료했습니다.\`
+**보내기: 말을 전달하려는 대상은 반드시 전부 태그한다. 예외 없음.**
+- 대상이 1명이면 \`<@ID>\`로 시작
+- 대상이 여러 명이면 전부 나열: \`<@ID1> <@ID2> <@ID3>\`로 시작
+- 답변, 보고, 위임, 질문 — 모든 경우에 태그
+
 ${config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : ''}${invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>` : ''}
 
 ## Discord Commands
@@ -117,17 +198,42 @@ Syntax: \`[discord:action key=value key="quoted value"]\`
 - \`[discord:edit-message label=greeting content="Updated text"]\` — own messages only
 - \`[discord:delete-message label=greeting]\` — own messages only
 
-**Memory (REQUIRED every response):**
-Update your memory file at the end of every response. Include the full replacement content:
+**Roles:**
+- \`[discord:create-role name=Developer]\` — create a role
+- \`[discord:create-role name=Developer color="#2ECC71"]\` — create with color
+- \`[discord:delete-role name=Developer]\`
+- \`[discord:assign-role role=Developer user=123456789]\` — assign role to user
+- \`[discord:remove-role role=Developer user=123456789]\` — remove role from user
+
+**Permissions (channel/category):**
+- \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel,SendMessages"]\`
+- \`[discord:set-permission channel=my-channel role=Developer deny="SendMessages"]\` — read-only
+- \`[discord:set-permission category=Projects user=123456789 allow="ViewChannel"]\`
+- \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel" deny="SendMessages"]\` — allow+deny 동시 가능
+- \`[discord:remove-permission channel=my-channel role=Developer]\` — 해당 대상의 권한 덮어쓰기 전부 제거
+사용 가능한 권한: ViewChannel, SendMessages, ReadMessageHistory, ManageMessages, ManageChannels, ManageRoles, EmbedLinks, AttachFiles, AddReactions, Connect, Speak, MentionEveryone, CreatePublicThreads, CreatePrivateThreads, UseExternalEmojis
+
+**Short-term Memory (REQUIRED every response):**
+Update your short-term memory at the end of every response. Include the full replacement content:
 \`\`\`
-[discord:edit-memory]
 ---MEMORY---
-(your full updated memory here)
+(current working context, pruned and updated)
 ---END-MEMORY---
 \`\`\`
-This overwrites your memory file completely. Keep it organized, concise, and up-to-date.
-What to track: ongoing tasks, key decisions, things the human asked you to remember, project context, blockers.
-What NOT to track: conversation text that's already in history, temporary/one-off info.
+This overwrites your short-term memory completely. Keep it lean and up-to-date.
+What to track: ongoing tasks, current blockers, temp context needed for next invocation.
+What NOT to track: conversation text already in history, stable facts (promote those to long-term).
+
+**Long-term Memory (only when needed):**
+When you learn something worth keeping permanently, also output:
+\`\`\`
+---LONG-MEMORY---
+(full long-term memory content — only output when adding/updating permanent knowledge)
+---END-LONG-MEMORY---
+\`\`\`
+This overwrites long-term memory completely — include ALL existing long-term entries plus new ones.
+What to promote: user preferences, project structure, recurring schedules, key decisions, team capabilities.
+Only output this block when you have something new to add or need to update existing entries.
 
 **Persona (self-edit):**
 When asked to update your persona/personality/character, output the command tag followed by a delimited block:
