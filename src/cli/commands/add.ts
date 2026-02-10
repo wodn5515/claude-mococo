@@ -25,10 +25,24 @@ const PERMISSION_PRESETS: Record<string, { allow?: string[]; deny?: string[] }> 
 
 const AVATAR_KEYS = ['robot', 'crown', 'brain', 'gear', 'palette', 'shield', 'eye', 'test', 'book'];
 
-const PERSONALITY_PRESETS: Record<string, string> = {
-  'Professional — formal, thorough, structured': 'Professional and thorough. Communicates clearly with structured responses. Focuses on correctness and best practices.',
-  'Casual — friendly, concise, direct': 'Casual and friendly. Keeps messages short and to the point. Uses a conversational tone.',
-  'Mentor — patient, educational, explains why': 'Patient and educational. Explains the reasoning behind decisions. Takes time to teach, not just do.',
+const MBTI_PRESETS: Record<string, string> = {
+  'ENTJ — 전략가, 결단력, 큰 그림': 'ENTJ — 전략가, 결단력, 큰 그림을 보는 리더',
+  'ISTJ — 규칙 준수, 체계적, 정확성': 'ISTJ — 규칙 준수, 체계적, 정확성 중시',
+  'ENFJ — 사람 중심, 공감, 조직 조화': 'ENFJ — 사람 중심 사고, 조직 조화, 공감 능력',
+  'INTP — 분석적, 논리적, 탐구형': 'INTP — 분석적, 논리적, 깊이 있는 탐구형',
+  'Custom': '',
+};
+
+const SPEECH_PRESETS: Record<string, string> = {
+  '모두 존댓말': [
+    '  - 회장님께: 존댓말. "회장님, ~입니다"',
+    '  - 대장코코에게: 존댓말. "대장님, ~입니다"',
+    '  - 다른 모코코에게: 존댓말. "{이름}코코님"',
+  ].join('\n'),
+  '회장님 존댓말 + 팀원 반말': [
+    '  - 회장님께: 철저한 존댓말. "회장님, ~입니다", "~드리겠습니다"',
+    '  - 다른 모코코들에게: 반말. "~해라", "~해봐", "~됐어?"',
+  ].join('\n'),
   'Custom': '',
 };
 
@@ -37,11 +51,11 @@ export async function runAdd(): Promise<void> {
   const teamsJsonPath = path.join(ws, 'teams.json');
   const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
 
-  console.log('Add a new assistant\n');
+  console.log('Add a new 모코코\n');
 
   // --- Identity ---
   console.log('── Identity ──');
-  const id = await ask('Assistant ID (lowercase, e.g. coder)');
+  const id = await ask('Assistant ID (lowercase, e.g. hr)');
   if (!id || !/^[a-z][a-z0-9_-]*$/.test(id)) {
     console.error('ID must be lowercase alphanumeric (start with letter).');
     process.exit(1);
@@ -51,42 +65,89 @@ export async function runAdd(): Promise<void> {
     process.exit(1);
   }
 
-  const name = await ask('Display name', id.charAt(0).toUpperCase() + id.slice(1));
-  const role = await ask('Role description', 'AI assistant');
+  const name = await ask('Display name (e.g. HR코코)', id.charAt(0).toUpperCase() + id.slice(1));
+  const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
 
-  // Personality
-  const personalityNames = Object.keys(PERSONALITY_PRESETS);
-  const personalityChoice = await choose('Personality:', personalityNames, 1);
-  let personality = PERSONALITY_PRESETS[personalityChoice];
-  if (!personality) {
-    personality = await ask('Describe the personality');
+  // --- Character ---
+  console.log('\n── Character ──');
+
+  // MBTI
+  const mbtiNames = Object.keys(MBTI_PRESETS);
+  const mbtiChoice = await choose('MBTI:', mbtiNames, 0);
+  let mbti = MBTI_PRESETS[mbtiChoice];
+  if (!mbti) {
+    mbti = await ask('MBTI (e.g. ISFJ — 성실, 배려, 실행력)');
   }
 
+  // Speech style
+  const speechNames = Object.keys(SPEECH_PRESETS);
+  const speechChoice = await choose('말투:', speechNames, 0);
+  let speechStyle = SPEECH_PRESETS[speechChoice];
+  if (!speechStyle) {
+    console.log('말투를 줄별로 입력 (빈 줄로 종료):');
+    const lines: string[] = [];
+    let line = await ask('  ');
+    while (line) {
+      lines.push(`  - ${line}`);
+      line = await ask('  ');
+    }
+    speechStyle = lines.join('\n');
+  }
+
+  // Traits
+  console.log('성격 특성 (행동 예시 포함, comma-separated):');
+  console.log('  예: "체계적 — 모든 요구사항을 구조화, 신중함 — 확실하지 않으면 확인"');
+  const traitsStr = await ask('  성격', '');
+  const traits = traitsStr
+    ? traitsStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  // Habits
+  console.log('습관 (comma-separated):');
+  console.log('  예: "보고 시 결론→근거→다음단계 순서, 위임 시 명령조로 마무리"');
+  const habitsStr = await ask('  습관', '');
+  const habits = habitsStr
+    ? habitsStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  // --- Role ---
+  console.log('\n── Role ──');
+  const role = await ask('핵심 역할 (1-2문장)');
+
+  console.log('담당 범위 (comma-separated):');
+  const scopeStr = await ask('  담당', '');
+  const scope = scopeStr
+    ? scopeStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  console.log('담당 아닌 것 (comma-separated):');
+  const notScopeStr = await ask('  비담당', '');
+  const notScope = notScopeStr
+    ? notScopeStr.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const authorityIndependent = await ask('독립 결정 가능한 것', '');
+  const authorityNeedsApproval = await ask('승인 필요한 것', '');
+
   // Expertise
-  console.log('Expertise (comma-separated, e.g. "TypeScript, React, Node.js"):');
-  const expertiseStr = await ask('  Skills', '');
+  console.log('전문 분야 (comma-separated):');
+  const expertiseStr = await ask('  Expertise', '');
   const expertise = expertiseStr
     ? expertiseStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // Custom rules
-  console.log('Custom rules (comma-separated, e.g. "Always write tests, Use ESLint"):');
+  console.log('추가 규칙 (comma-separated):');
   const rulesStr = await ask('  Rules', '');
   const rules = rulesStr
     ? rulesStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
-  const bossTitle = await ask('What should this bot call you? (e.g. Boss, Sir)', '');
-
-  const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
-  const useTeams = await confirm('Enable agent team mode (parallel sub-agents for complex tasks)?', false);
-
+  // Agent teams
+  const useTeams = await confirm('Enable agent team mode (parallel sub-agents)?', false);
   let teamRules: string[] = [];
   if (useTeams) {
-    console.log('Team rules (comma-separated). Examples:');
-    console.log('  "Spawn a tester agent for every code change"');
-    console.log('  "Use max 3 sub-agents, one for code, one for tests, one for docs"');
-    console.log('  "Sub-agents must write TypeScript with strict mode"');
+    console.log('Team rules (comma-separated):');
     const teamRulesStr = await ask('  Team rules', '');
     teamRules = teamRulesStr
       ? teamRulesStr.split(',').map(s => s.trim()).filter(Boolean)
@@ -160,12 +221,17 @@ export async function runAdd(): Promise<void> {
   // Generate prompt file
   const promptPath = path.join(ws, 'prompts', `${id}.md`);
   if (!fs.existsSync(promptPath)) {
-    fs.writeFileSync(promptPath, generatePrompt({ name, role, personality, expertise, rules, isLeader, bossTitle: bossTitle || undefined }));
+    fs.writeFileSync(promptPath, generatePrompt({
+      name, mbti, speechStyle, traits, habits,
+      role, scope, notScope,
+      authorityIndependent, authorityNeedsApproval,
+      expertise, rules, isLeader,
+    }));
   }
 
-  console.log(`\nAssistant "${name}" (${id}) added.`);
+  console.log(`\n모코코 "${name}" (${id}) 추가 완료.`);
   console.log(`  Config:  teams.json`);
-  console.log(`  Prompt:  prompts/${id}.md  (edit this for full control)`);
+  console.log(`  Prompt:  prompts/${id}.md  (직접 수정 가능)`);
   console.log(`  Tokens:  .env`);
   console.log(`\nRun \`mococo start\` to launch.`);
 }

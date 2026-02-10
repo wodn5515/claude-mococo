@@ -1,55 +1,76 @@
 export interface PromptOptions {
   name: string;
+  mbti: string;
+  speechStyle: string;
+  traits: string[];
+  habits: string[];
   role: string;
-  personality: string;
+  scope: string[];
+  notScope: string[];
+  authorityIndependent: string;
+  authorityNeedsApproval: string;
   expertise: string[];
   rules: string[];
   isLeader: boolean;
-  bossTitle?: string;
 }
 
 export function generatePrompt(opts: PromptOptions): string {
-  const leaderBlock = opts.isLeader
-    ? `
-## Leadership
-- You respond to ALL messages in the channel (not just @mentions)
-- Delegate tasks to other team members by @mentioning them
-- Restate what you understood before delegating
-- NEVER write code yourself — always delegate implementation work`
-    : `
-## Collaboration
-- You only respond when @mentioned or invoked by another team member
-- Tag other team members with @Name to hand off work when appropriate`;
+  const traitsBlock = opts.traits.length > 0
+    ? opts.traits.map(t => `  - ${t}`).join('\n')
+    : '  - (페르소나 파일에서 직접 작성)';
+
+  const habitsBlock = opts.habits.length > 0
+    ? opts.habits.map(h => `  - ${h}`).join('\n')
+    : '  - (페르소나 파일에서 직접 작성)';
+
+  const scopeBlock = opts.scope.length > 0
+    ? opts.scope.map(s => `- ${s}`).join('\n')
+    : '- (페르소나 파일에서 직접 작성)';
+
+  const notScopeBlock = opts.notScope.length > 0
+    ? opts.notScope.map(s => `- ${s}`).join('\n')
+    : '- (페르소나 파일에서 직접 작성)';
 
   const expertiseBlock = opts.expertise.length > 0
-    ? `\n\n## Expertise\n${opts.expertise.map(e => `- ${e}`).join('\n')}`
+    ? `\n## Expertise\n${opts.expertise.map(e => `- ${e}`).join('\n')}\n`
     : '';
 
   const customRules = opts.rules.length > 0
-    ? '\n' + opts.rules.map(r => `- ${r}`).join('\n')
-    : '';
+    ? opts.rules.map(r => `- ${r}`).join('\n')
+    : '- (페르소나 파일에서 직접 작성)';
 
-  const bossLine = opts.bossTitle
-    ? `\nWhen addressing the human, always call them **${opts.bossTitle}**.`
+  const leaderExtra = opts.isLeader
+    ? '\n- 채널의 모든 메시지에 반응 (@멘션뿐 아니라 전부)\n- 직접 작업 절대 금지 — 오직 위임과 보고만'
     : '';
 
   return `# ${opts.name}
 
-You are **${opts.name}**, an AI assistant on Discord.${bossLine}
+You are **${opts.name}**, an AI assistant on Discord.
+When addressing the human, always call them **회장님**.
+
+## Character
+- **MBTI:** ${opts.mbti}
+- **말투:**
+${opts.speechStyle}
+- **성격:**
+${traitsBlock}
+- **습관:**
+${habitsBlock}
 
 ## Role
 ${opts.role}
 
-## Personality
-${opts.personality}
-${leaderBlock}
-${expertiseBlock}
+**담당:**
+${scopeBlock}
 
-## Rules
-- Be concise — Discord messages should be readable, not essays
-- Report status updates as you work
-- NEVER merge pull requests — only humans merge
-- NEVER expose secrets, tokens, or credentials
-- Commit each logical unit of work separately${customRules}
+**담당 아님:**
+${notScopeBlock}
+
+**결정 권한:**
+- 독립 결정: ${opts.authorityIndependent || '(페르소나 파일에서 직접 작성)'}
+- 승인 필요: ${opts.authorityNeedsApproval || '(페르소나 파일에서 직접 작성)'}
+${expertiseBlock}
+## Rules${leaderExtra}
+${customRules}
 `;
 }
