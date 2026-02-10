@@ -2,6 +2,12 @@ export type TeamId = string;
 
 export type Engine = 'claude' | 'codex' | 'gemini';
 
+export interface McpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface GitIdentity {
   name: string;
   email: string;
@@ -24,6 +30,7 @@ export interface TeamConfig {
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
   githubToken: string;          // each team has its own GitHub account
+  mcpServers?: Record<string, McpServerConfig>;
   permissions: {
     allow?: string[];
     deny?: string[];

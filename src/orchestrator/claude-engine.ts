@@ -1,19 +1,28 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import { BaseEngine } from './engine-base.js';
+import { writeMcpConfig, cleanupMcpConfig } from './mcp-config.js';
 
 export class ClaudeEngine extends BaseEngine {
   private proc: ChildProcess | null = null;
+  private mcpConfigPath: string | null = null;
 
   async start(): Promise<void> {
-    this.proc = spawn('claude', [
+    const args = [
       '-p', this.opts.prompt,
       '--output-format', 'stream-json',
       '--verbose',
       '--model', this.opts.model,
       '--dangerously-skip-permissions',
       '--max-budget-usd', String(this.opts.maxBudget),
-    ], {
+    ];
+
+    if (this.opts.mcpServers && Object.keys(this.opts.mcpServers).length > 0) {
+      this.mcpConfigPath = writeMcpConfig(this.opts.teamId, this.opts.mcpServers, this.opts.cwd);
+      args.push('--mcp-config', this.mcpConfigPath);
+    }
+
+    this.proc = spawn('claude', args, {
       cwd: this.opts.cwd,
       env: {
         ...this.getTeamEnv(),
@@ -42,6 +51,7 @@ export class ClaudeEngine extends BaseEngine {
 
     this.proc.on('exit', (code) => {
       console.log(`[claude:${this.opts.teamId}] exited with code ${code}`);
+      if (this.mcpConfigPath) cleanupMcpConfig(this.opts.teamId, this.opts.cwd);
       this.emit('exit', code);
     });
   }

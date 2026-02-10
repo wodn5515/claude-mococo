@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import type { McpServerConfig } from '../types.js';
 
 export interface EngineOptions {
   prompt: string;
@@ -9,6 +10,7 @@ export interface EngineOptions {
   gitName: string;
   gitEmail: string;
   githubToken: string;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export abstract class BaseEngine extends EventEmitter {

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { TeamsConfig, TeamConfig } from './types.js';
+import type { TeamsConfig, TeamConfig, McpServerConfig } from './types.js';
 
 const AVATAR_MAP: Record<string, string> = {
   crown: 'https://em-content.zobj.net/source/apple/391/crown_1f451.png',
@@ -28,6 +28,27 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
     const githubTokenEnv = cfg.githubTokenEnv ?? `${id.toUpperCase()}_GITHUB_TOKEN`;
     const githubToken = process.env[githubTokenEnv] ?? '';
 
+    // Resolve MCP server configs: expand $VAR references in env values
+    let mcpServers: Record<string, McpServerConfig> | undefined;
+    if (cfg.mcpServers) {
+      mcpServers = {};
+      for (const [name, server] of Object.entries(cfg.mcpServers as Record<string, any>)) {
+        const resolvedEnv: Record<string, string> = {};
+        if (server.env) {
+          for (const [key, val] of Object.entries(server.env as Record<string, string>)) {
+            resolvedEnv[key] = val.startsWith('$')
+              ? (process.env[val.slice(1)] ?? '')
+              : val;
+          }
+        }
+        mcpServers[name] = {
+          command: server.command,
+          args: server.args,
+          env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
+        };
+      }
+    }
+
     teams[id] = {
       id,
       name: cfg.name,
@@ -48,6 +69,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
       },
       discordToken,
       githubToken,
+      mcpServers,
       permissions: cfg.permissions ?? {},
     };
   }

@@ -26,6 +26,7 @@ export async function invokeTeam(
     gitName: team.git.name,
     gitEmail: team.git.email,
     githubToken: team.githubToken,
+    mcpServers: team.mcpServers,
   });
 
   return new Promise((resolve, reject) => {
