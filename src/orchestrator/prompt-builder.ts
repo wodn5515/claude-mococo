@@ -53,12 +53,23 @@ export async function buildTeamPrompt(
     // no memory file yet — that's fine
   }
 
+  // Load inbox (messages received since last invocation)
+  const inboxPath = path.resolve(ws, '.mococo/inbox', `${team.id}.md`);
+  let inbox = '';
+  try {
+    inbox = fs.readFileSync(inboxPath, 'utf-8').trim();
+  } catch {
+    // no inbox yet — that's fine
+  }
+
   return `${template}
 
 ## Your Memory
 Your persistent memory file. This survives across conversations — use it to track ongoing tasks, decisions, context, and anything you need to remember.
 ${memory ? `\n${memory}\n` : '\n(empty — nothing saved yet)\n'}
-**You MUST update your memory at the end of every response** using the edit-memory command (see Discord Commands below). Review what you currently have, add new information from this conversation, and remove anything outdated. Keep it concise and organized.
+## Inbox (messages since your last response)
+${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
+**You MUST update your memory at the end of every response** using the edit-memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.
 
 ## Team Directory
 These are the teams you can tag. Mention @TeamName to hand off work:

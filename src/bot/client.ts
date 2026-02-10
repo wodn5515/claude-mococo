@@ -12,6 +12,23 @@ import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '..
 // Map teamId → their Discord client (so teams can send messages as themselves)
 export const teamClients = new Map<string, Client>();
 
+// ---------------------------------------------------------------------------
+// Inbox helpers — append chat to a team's inbox file for memory processing
+// ---------------------------------------------------------------------------
+
+function appendToInbox(teamId: string, from: string, content: string, workspacePath: string) {
+  const dir = path.resolve(workspacePath, '.mococo/inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.resolve(dir, `${teamId}.md`);
+  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  fs.appendFileSync(file, `[${ts}] ${from}: ${content}\n`);
+}
+
+function clearInbox(teamId: string, workspacePath: string) {
+  const file = path.resolve(workspacePath, '.mococo/inbox', `${teamId}.md`);
+  try { fs.unlinkSync(file); } catch {}
+}
+
 // Shared resource registry for discord command name→id resolution
 const registry = new ResourceRegistry();
 
@@ -128,6 +145,9 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         };
         addMessage(msg.channelId, humanMsg);
 
+        // Leader reads every message — append to inbox for memory processing
+        appendToInbox(team.id, msg.author.displayName, content, config.workspacePath);
+
         // If user @mentioned a specific bot, let that bot's own handler deal with it
         if (mentionsOtherBot) return;
 
@@ -148,6 +168,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           mentions: [team.id],
         };
         addMessage(msg.channelId, humanMsg);
+        appendToInbox(team.id, msg.author.displayName, content, config.workspacePath);
         handleTeamInvocation(team, humanMsg, msg.channelId, config, env);
       }
     });
@@ -272,6 +293,7 @@ async function handleTeamInvocation(
     console.error(`[${team.name}] Error: ${errorMsg}`);
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
+    clearInbox(team.id, config.workspacePath);
     markFree(team.id);
   }
 }
