@@ -68,6 +68,15 @@ function parseCommands(output: string): ParsedCommand[] {
     commands.push({ raw, action: 'edit-persona', params: { _content: content } });
   }
 
+  // Block syntax: [discord:edit-memory] + ---MEMORY---\n...\n---END-MEMORY---
+  const memoryRe = /\[discord:edit-memory\]\s*\n---MEMORY---\n([\s\S]*?)\n---END-MEMORY---/g;
+  while ((match = memoryRe.exec(masked)) !== null) {
+    const raw = output.slice(match.index, match.index + match[0].length);
+    const contentOffset = match.index + match[0].indexOf(match[1]);
+    const content = output.slice(contentOffset, contentOffset + match[1].length);
+    commands.push({ raw, action: 'edit-memory', params: { _content: content } });
+  }
+
   // Legacy: [task:create name @bots...]
   const legacyCreateRe = /\[task:create\s+(\S+)([^\]]*)\]/gi;
   while ((match = legacyCreateRe.exec(masked)) !== null) {
@@ -160,8 +169,9 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
       case 'react':           return await handleReact(cmd.params, ctx);
       case 'edit-message':    return await handleEditMessage(cmd.params, ctx);
       case 'delete-message':  return await handleDeleteMessage(cmd.params, ctx);
-      // Persona
+      // Persona & Memory
       case 'edit-persona':    return await handleEditPersona(cmd.params, ctx);
+      case 'edit-memory':     return await handleEditMemory(cmd.params, ctx);
       // Legacy alias
       case '_task-done':      return await handleTaskDone(cmd.params, ctx);
       default:
@@ -476,4 +486,15 @@ async function handleEditPersona(params: Record<string, string>, ctx: CommandCon
   fs.writeFileSync(promptPath, content);
   console.log(`[discord-cmd] Updated persona for ${ctx.team.name} at ${ctx.team.prompt}`);
   await ctx.sendAsTeam(ctx.channelId, ctx.team, `Persona updated.`);
+}
+
+async function handleEditMemory(params: Record<string, string>, ctx: CommandContext) {
+  const content = params._content;
+  if (!content) return;
+
+  const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory');
+  fs.mkdirSync(memoryDir, { recursive: true });
+  const memoryPath = path.resolve(memoryDir, `${ctx.team.id}.md`);
+  fs.writeFileSync(memoryPath, content);
+  console.log(`[discord-cmd] Updated memory for ${ctx.team.name}`);
 }

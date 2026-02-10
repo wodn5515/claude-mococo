@@ -43,7 +43,22 @@ export async function buildTeamPrompt(
     ? repos.map(r => `- repos/${r}`).join('\n')
     : '(no repos linked yet)';
 
+  // Load persistent memory file
+  const memoryDir = path.resolve(ws, '.mococo/memory');
+  const memoryPath = path.resolve(memoryDir, `${team.id}.md`);
+  let memory = '';
+  try {
+    memory = fs.readFileSync(memoryPath, 'utf-8').trim();
+  } catch {
+    // no memory file yet — that's fine
+  }
+
   return `${template}
+
+## Your Memory
+Your persistent memory file. This survives across conversations — use it to track ongoing tasks, decisions, context, and anything you need to remember.
+${memory ? `\n${memory}\n` : '\n(empty — nothing saved yet)\n'}
+**You MUST update your memory at the end of every response** using the edit-memory command (see Discord Commands below). Review what you currently have, add new information from this conversation, and remove anything outdated. Keep it concise and organized.
 
 ## Team Directory
 These are the teams you can tag. Mention @TeamName to hand off work:
@@ -90,6 +105,18 @@ Syntax: \`[discord:action key=value key="quoted value"]\`
 - \`[discord:react id=123456789 emoji=thumbsup]\`
 - \`[discord:edit-message label=greeting content="Updated text"]\` — own messages only
 - \`[discord:delete-message label=greeting]\` — own messages only
+
+**Memory (REQUIRED every response):**
+Update your memory file at the end of every response. Include the full replacement content:
+\`\`\`
+[discord:edit-memory]
+---MEMORY---
+(your full updated memory here)
+---END-MEMORY---
+\`\`\`
+This overwrites your memory file completely. Keep it organized, concise, and up-to-date.
+What to track: ongoing tasks, key decisions, things the human asked you to remember, project context, blockers.
+What NOT to track: conversation text that's already in history, temporary/one-off info.
 
 **Persona (self-edit):**
 When asked to update your persona/personality/character, output the command tag followed by a delimited block:
