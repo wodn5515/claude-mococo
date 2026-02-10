@@ -17,51 +17,31 @@ Inbox:
 ${inboxContent}`;
 }
 
-interface StreamJsonEvent {
-  type: string;
-  result?: string;
-  [key: string]: unknown;
-}
-
 function runClaudeSummary(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', [
       '-p', prompt,
       '--model', 'haiku',
       '--max-turns', '1',
-      '--output-format', 'stream-json',
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    let resultText = '';
-    let buffer = '';
+    let stdout = '';
+    let stderr = '';
 
     child.stdout.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString();
-      // stream-json outputs one JSON object per line
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const event = JSON.parse(trimmed) as StreamJsonEvent;
-          if (event.type === 'result' && event.result) {
-            resultText = event.result;
-          }
-        } catch {
-          // skip malformed lines
-        }
-      }
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
     });
 
     child.on('error', (err) => reject(err));
     child.on('close', (code) => {
-      if (resultText) {
-        resolve(resultText);
-      } else if (code === 0) {
-        resolve('');
+      if (code === 0) {
+        resolve(stdout.trim());
       } else {
-        reject(new Error(`claude exited with code ${code}`));
+        reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`));
       }
     });
   });

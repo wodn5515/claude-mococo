@@ -159,7 +159,10 @@ ${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
 ## Inbox (messages since your last response)
 ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
 **You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.
-**Always check your memory first before using external tools (APIs, MCP servers).** If the information you need is already here, use it directly. Only call external tools when memory has no relevant data, the data is stale, or the user explicitly asks for fresh data.
+**⚠️ CRITICAL: 외부 도구 호출 전 반드시 메모리를 먼저 확인하라.**
+- Short-term/Long-term Memory에 이미 있는 데이터는 절대 다시 API 호출하지 마라.
+- 예: 일주일치 일정을 이미 조회해서 메모리에 있으면, 오늘 일정을 물어봤을 때 메모리에서 추출하라. 같은 데이터를 또 API로 가져오지 마라.
+- 외부 도구(API, MCP 서버)는 메모리에 관련 데이터가 전혀 없거나, 데이터가 오래되었거나(24시간+), 사용자가 명시적으로 "새로 조회해줘"라고 요청한 경우에만 호출하라.
 
 ## Server Members
 ${memberList || '(no member data)'}
