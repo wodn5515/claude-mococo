@@ -62,6 +62,15 @@ export async function buildTeamPrompt(
     // no shared rules file — that's fine
   }
 
+  // Load shared member list
+  let memberList = '';
+  const membersPath = path.resolve(ws, '.mococo/members.md');
+  try {
+    memberList = fs.readFileSync(membersPath, 'utf-8').trim();
+  } catch {
+    // no member list yet
+  }
+
   // Dynamic Team Directory — auto-generated from teams.json
   const teamDirectory = Object.values(config.teams)
     .filter(t => t.id !== team.id)
@@ -152,6 +161,9 @@ ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
 **You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.
 **Always check your memory first before using external tools (APIs, MCP servers).** If the information you need is already here, use it directly. Only call external tools when memory has no relevant data, the data is stale, or the user explicitly asks for fresh data.
 
+## Server Members
+${memberList || '(no member data)'}
+
 ## Team Directory
 These are the teams you can tag. Mention @TeamName to hand off work:
 ${teamDirectory}
@@ -204,6 +216,7 @@ Syntax: \`[discord:action key=value key="quoted value"]\`
 - \`[discord:delete-role name=Developer]\`
 - \`[discord:assign-role role=Developer user=123456789]\` — assign role to user
 - \`[discord:remove-role role=Developer user=123456789]\` — remove role from user
+- \`[discord:list-roles]\` — 서버 역할 목록 조회 (이름, 멤버 수)
 
 **Permissions (channel/category):**
 - \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel,SendMessages"]\`
@@ -244,8 +257,6 @@ When asked to update your persona/personality/character, output the command tag 
 ---END-PERSONA---
 \`\`\`
 This rewrites your persona file. Include your ENTIRE persona — anything omitted will be lost.
-
-**Legacy (still works):** \`[task:create name @bots]\` and \`[task:done name]\`
 
 ## The Message That Triggered You
 From: ${invocation.message.teamId === 'human' ? `Human (<@${invocation.message.discordId ?? ''}>)` : invocation.message.teamName}

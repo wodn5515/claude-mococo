@@ -144,28 +144,6 @@ function parseCommands(output: string): ParsedCommand[] {
     commands.push({ raw: match[0], action: 'edit-long-memory', params: { _content: match[1] } });
   }
 
-  // Legacy: [task:create name @bots...]
-  const legacyCreateRe = /\[task:create\s+(\S+)([^\]]*)\]/gi;
-  while ((match = legacyCreateRe.exec(masked)) !== null) {
-    const raw = output.slice(match.index, match.index + match[0].length);
-    commands.push({
-      raw,
-      action: 'create-channel',
-      params: { name: `task-${match[1]}`, _taskName: match[1], _assigned: match[2]?.trim() || '' },
-    });
-  }
-
-  // Legacy: [task:done name]
-  const legacyDoneRe = /\[task:done\s+(\S+)\]/gi;
-  while ((match = legacyDoneRe.exec(masked)) !== null) {
-    const raw = output.slice(match.index, match.index + match[0].length);
-    commands.push({
-      raw,
-      action: '_task-done',
-      params: { name: match[1] },
-    });
-  }
-
   return commands;
 }
 
@@ -256,8 +234,8 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
       case 'edit-persona':    return await handleEditPersona(cmd.params, ctx);
       case 'edit-memory':     return await handleEditMemory(cmd.params, ctx);
       case 'edit-long-memory': return await handleEditLongMemory(cmd.params, ctx);
-      // Legacy alias
-      case '_task-done':      return await handleTaskDone(cmd.params, ctx);
+      // Query
+      case 'list-roles':      return await handleListRoles(ctx);
       default:
         console.warn(`[discord-cmd] Unknown command: ${cmd.action}`);
     }
@@ -321,9 +299,6 @@ async function handleCreateChannel(params: Record<string, string>, ctx: CommandC
   let parentId: string | undefined;
   if (params.category) {
     parentId = resolveCategory(params.category, ctx);
-  } else if (params._taskName) {
-    // Legacy [task:create] — use tasks category
-    parentId = ctx.env.tasksCategoryId;
   }
 
   const channel = await ctx.guild.channels.create({
@@ -332,16 +307,8 @@ async function handleCreateChannel(params: Record<string, string>, ctx: CommandC
     parent: parentId,
   });
 
-  const registryName = params._taskName ?? name;
-  ctx.registry.setChannel(registryName, channel.id);
+  ctx.registry.setChannel(name, channel.id);
   console.log(`[discord-cmd] Created #${name} (${channel.id})`);
-
-  // Legacy task:create behaviour — notify and post context
-  if (params._taskName) {
-    await ctx.sendAsTeam(ctx.channelId, ctx.team, `Task channel created: <#${channel.id}>`);
-    const assigned = params._assigned || 'all';
-    await ctx.sendAsTeam(channel.id, ctx.team, `Task **${params._taskName}** started. Assigned: ${assigned}`);
-  }
 }
 
 async function handleDeleteChannel(params: Record<string, string>, ctx: CommandContext) {
@@ -543,29 +510,6 @@ async function handleDeleteMessage(params: Record<string, string>, ctx: CommandC
   console.log(`[discord-cmd] Deleted message ${msgId}`);
 }
 
-// --- Legacy: [task:done] ---
-
-async function handleTaskDone(params: Record<string, string>, ctx: CommandContext) {
-  const name = params.name;
-  if (!name) return;
-
-  if (!ctx.env.archiveCategoryId) {
-    console.warn('[discord-cmd] ARCHIVE_CATEGORY_ID not set — cannot archive channels');
-    return;
-  }
-
-  const channel = resolveChannel(name, ctx);
-  if (!channel) {
-    console.warn(`[discord-cmd] No task channel found for "${name}"`);
-    return;
-  }
-
-  await channel.setParent(ctx.env.archiveCategoryId);
-  ctx.registry.deleteChannel(name);
-  await ctx.sendAsTeam(ctx.channelId, ctx.team, `Task **${name}** completed and channel archived.`);
-  console.log(`[discord-cmd] Archived task channel "${name}"`);
-}
-
 // --- Permission name mapping ---
 
 const PERMISSION_MAP: Record<string, bigint> = {
@@ -586,12 +530,11 @@ const PERMISSION_MAP: Record<string, bigint> = {
   'UseExternalEmojis':  PermissionFlagsBits.UseExternalEmojis,
 };
 
-function parsePermissionNames(str: string): Record<string, boolean> {
-  const result: Record<string, boolean> = {};
+function parsePermissionNames(str: string): string[] {
+  const result: string[] = [];
   for (const name of str.split(',').map(s => s.trim()).filter(Boolean)) {
-    const flag = PERMISSION_MAP[name];
-    if (flag !== undefined) {
-      result[String(flag)] = true;
+    if (PERMISSION_MAP[name] !== undefined) {
+      result.push(name);
     } else {
       console.warn(`[discord-cmd] Unknown permission: ${name}`);
     }
@@ -636,12 +579,12 @@ async function handleSetPermission(params: Record<string, string>, ctx: CommandC
   }
   if (!targetId) return;
 
-  const allow = params.allow ? parsePermissionNames(params.allow) : {};
-  const deny = params.deny ? parsePermissionNames(params.deny) : {};
+  const allowNames = params.allow ? parsePermissionNames(params.allow) : [];
+  const denyNames = params.deny ? parsePermissionNames(params.deny) : [];
 
   const overwrite: Record<string, boolean | null> = {};
-  for (const [flag] of Object.entries(allow)) overwrite[flag] = true;
-  for (const [flag] of Object.entries(deny)) overwrite[flag] = false;
+  for (const name of allowNames) overwrite[name] = true;
+  for (const name of denyNames) overwrite[name] = false;
 
   await channel.permissionOverwrites.edit(targetId, overwrite, {
     reason: `Set by ${ctx.team.name}`,
@@ -743,6 +686,19 @@ async function handleRemoveRole(params: Record<string, string>, ctx: CommandCont
 
   await member.roles.remove(role, `Removed by ${ctx.team.name}`);
   console.log(`[discord-cmd] Removed role "${roleName}" from ${member.user.tag}`);
+}
+
+// --- Role Query Handler ---
+
+async function handleListRoles(ctx: CommandContext): Promise<void> {
+  const roles = ctx.guild.roles.cache
+    .filter(r => r.name !== '@everyone')
+    .sort((a, b) => b.position - a.position)
+    .map(r => `- ${r.name} (${r.members.size}명)`)
+    .join('\n');
+  const output = roles || '(역할 없음)';
+  await ctx.sendAsTeam(ctx.channelId, ctx.team, `**서버 역할 목록:**\n${output}`);
+  console.log(`[discord-cmd] Listed ${ctx.guild.roles.cache.size - 1} roles`);
 }
 
 // --- Persona Handler ---

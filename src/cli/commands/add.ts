@@ -164,7 +164,6 @@ export async function runAdd(): Promise<void> {
   // --- Tokens ---
   console.log('\n── Tokens ──');
   const discordToken = await ask('Discord bot token');
-  const githubToken = await ask('GitHub PAT (optional, press enter to skip)');
 
   // --- Channels ---
   console.log('\n── Channels ──');
@@ -211,12 +210,7 @@ export async function runAdd(): Promise<void> {
 
   // Append tokens to .env
   const envPath = path.join(ws, '.env');
-  const envLines: string[] = [];
-  envLines.push(`${id.toUpperCase()}_DISCORD_TOKEN=${discordToken}`);
-  if (githubToken) {
-    envLines.push(`${id.toUpperCase()}_GITHUB_TOKEN=${githubToken}`);
-  }
-  fs.appendFileSync(envPath, envLines.join('\n') + '\n');
+  fs.appendFileSync(envPath, `${id.toUpperCase()}_DISCORD_TOKEN=${discordToken}\n`);
 
   // Generate prompt file
   const promptPath = path.join(ws, 'prompts', `${id}.md`);

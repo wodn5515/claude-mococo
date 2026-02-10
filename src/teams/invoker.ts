@@ -25,7 +25,6 @@ export async function invokeTeam(
     teamId: team.id,
     gitName: team.git.name,
     gitEmail: team.git.email,
-    githubToken: team.githubToken,
     mcpServers: team.mcpServers,
   });
 

@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Client, GatewayIntentBits, type TextChannel, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, type GuildMember, type TextChannel, type Message } from 'discord.js';
 import { routeMessage, findMentionedTeams } from './router.js';
 import { invokeTeam } from '../teams/invoker.js';
 import { addMessage, getRecentConversation } from '../teams/context.js';
 import { isBusy, markBusy, markFree, waitForFree, getStatus } from '../teams/concurrency.js';
 import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
+import { startInboxCompactor } from './inbox-compactor.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '../types.js';
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
@@ -27,6 +28,65 @@ function appendToInbox(teamId: string, from: string, content: string, workspaceP
 function clearInbox(teamId: string, workspacePath: string) {
   const file = path.resolve(workspacePath, '.mococo/inbox', `${teamId}.md`);
   try { fs.unlinkSync(file); } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Member tracking — update leader's long-term memory on join/leave
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Member tracking — shared member list for all mococos
+// ---------------------------------------------------------------------------
+
+function writeMemberList(members: Map<string, string>, workspacePath: string) {
+  const dir = path.resolve(workspacePath, '.mococo');
+  fs.mkdirSync(dir, { recursive: true });
+  const membersPath = path.resolve(dir, 'members.md');
+  const lines = Array.from(members.entries())
+    .map(([id, name]) => `- ${name} (${id})`)
+    .join('\n');
+  fs.writeFileSync(membersPath, lines + '\n');
+}
+
+/** Full sync: fetch all guild members and rebuild members.md */
+async function syncMemberList(client: Client, workspacePath: string) {
+  const guild = client.guilds.cache.first();
+  if (!guild) return;
+
+  const fetched = await guild.members.fetch();
+  const members = new Map<string, string>();
+  for (const [id, m] of fetched) {
+    members.set(id, m.displayName || m.user.username);
+  }
+  writeMemberList(members, workspacePath);
+  console.log(`[member-tracking] Synced ${members.size} members`);
+}
+
+function updateMemberTracking(
+  action: 'join' | 'leave',
+  member: GuildMember,
+  workspacePath: string,
+) {
+  // Parse existing member list
+  const membersPath = path.resolve(workspacePath, '.mococo/members.md');
+  const members = new Map<string, string>();
+  try {
+    const content = fs.readFileSync(membersPath, 'utf-8');
+    for (const line of content.split('\n')) {
+      const m = line.match(/^- (.+?) \((\d+)\)$/);
+      if (m) members.set(m[2], m[1]);
+    }
+  } catch {}
+
+  const displayName = member.displayName || member.user.username;
+  if (action === 'join') {
+    members.set(member.id, displayName);
+  } else {
+    members.delete(member.id);
+  }
+
+  writeMemberList(members, workspacePath);
+  console.log(`[member-tracking] ${action}: ${displayName} (${member.id})`);
 }
 
 // Shared resource registry for discord command name→id resolution
@@ -89,6 +149,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        ...(team.isLeader ? [GatewayIntentBits.GuildMembers] : []),
       ],
     });
 
@@ -108,8 +169,42 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           } catch {}
         }
         console.log(`  ${team.name} bot online as @${client.user.tag}`);
+
+        // Leader: sync full member list on startup
+        if (team.isLeader) {
+          syncMemberList(client, config.workspacePath).catch(() => {});
+        }
       }
     });
+
+    // Member join/leave tracking (leader only)
+    if (team.isLeader && env.memberTrackingChannelId) {
+      client.on('guildMemberAdd', async (member: GuildMember) => {
+        updateMemberTracking('join', member, config.workspacePath);
+
+        // If the new member is a mococo bot, trigger welcome flow
+        const isMococo = Object.values(config.teams).some(
+          t => t.discordUserId === member.id,
+        );
+        if (isMococo) {
+          const channelId = env.memberTrackingChannelId!;
+          const displayName = member.displayName || member.user.username;
+          const triggerMsg: ConversationMessage = {
+            teamId: 'system',
+            teamName: 'System',
+            content: `[신규 모코코 입장] ${displayName} (<@${member.id}>) 님이 서버에 참가했습니다. 환영 인사를 진행해주세요.`,
+            timestamp: new Date(),
+            mentions: [team.id],
+          };
+          addMessage(channelId, triggerMsg);
+          handleTeamInvocation(team, triggerMsg, channelId, config, env);
+        }
+      });
+
+      client.on('guildMemberRemove', async (member) => {
+        updateMemberTracking('leave', member as GuildMember, config.workspacePath);
+      });
+    }
 
     // Message handler for this team's bot
     client.on('messageCreate', async (msg: Message) => {
@@ -176,6 +271,9 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     teamClients.set(team.id, client);
     await client.login(team.discordToken);
   }
+
+  // Start periodic inbox compaction
+  startInboxCompactor(config);
 }
 
 async function handleAdminCommand(

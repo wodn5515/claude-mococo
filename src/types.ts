@@ -29,7 +29,6 @@ export interface TeamConfig {
   teamRules?: string[];   // rules for how sub-agents are created and behave
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
-  githubToken: string;          // each team has its own GitHub account
   mcpServers?: Record<string, McpServerConfig>;
   permissions: {
     allow?: string[];
@@ -64,8 +63,7 @@ export interface TeamInvocation {
 export interface EnvConfig {
   workChannelId?: string;
   hookPort: number;
-  tasksCategoryId?: string;   // Discord category for active task channels
-  archiveCategoryId?: string; // Discord category for archived task channels
+  memberTrackingChannelId?: string; // Channel to post member join/leave notifications
 }
 
 export interface HookEvent {

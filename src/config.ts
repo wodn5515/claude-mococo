@@ -24,10 +24,6 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
     const discordTokenEnv = cfg.discordTokenEnv ?? `${id.toUpperCase()}_DISCORD_TOKEN`;
     const discordToken = process.env[discordTokenEnv] ?? '';
 
-    // Resolve GitHub token: read env var name from config
-    const githubTokenEnv = cfg.githubTokenEnv ?? `${id.toUpperCase()}_GITHUB_TOKEN`;
-    const githubToken = process.env[githubTokenEnv] ?? '';
-
     // Resolve MCP server configs: expand $VAR references in env values
     let mcpServers: Record<string, McpServerConfig> | undefined;
     if (cfg.mcpServers) {
@@ -68,7 +64,6 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
         email: `mococo-${id}@users.noreply.github.com`,
       },
       discordToken,
-      githubToken,
       mcpServers,
       permissions: cfg.permissions ?? {},
     };

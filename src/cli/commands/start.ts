@@ -17,6 +17,7 @@ export async function runStart(): Promise<void> {
   const env: EnvConfig = {
     workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
+    memberTrackingChannelId: process.env.MEMBER_TRACKING_CHANNEL_ID || undefined,
   };
 
   if (!env.workChannelId) {
