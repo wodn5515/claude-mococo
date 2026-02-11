@@ -177,7 +177,7 @@ Use these sections to organize:
 ### 캐시된 외부 데이터
 (최근 API 조회 결과 + 조회 시각)
 \`\`\`
-**⚠️ 대기 항목에는 반드시 #ch:channelId를 포함하라.** 이 정보가 있어야 자동 실행 루프가 어느 채널에서 작업을 이어할지 알 수 있다.
+**⚠️ 진행중 작업 및 대기 항목에는 반드시 #ch:channelId를 포함하라.** 이 정보가 있어야 자동 실행 루프가 어느 채널에서 작업을 이어할지 알 수 있다.
 ${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
 ## Inbox (messages since your last response)
 ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}

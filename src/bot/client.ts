@@ -9,6 +9,7 @@ import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import { startInboxCompactor } from './inbox-compactor.js';
 import { startMemoryConsolidator } from './memory-consolidator.js';
+import { startImprovementScanner } from './improvement-scanner.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '../types.js';
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
@@ -285,6 +286,19 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     handleTeamInvocation(team, triggerMsg, channelId, config, env);
   });
   startMemoryConsolidator(config);
+
+  // Start improvement scanner (30min cycle: scan repos → save improvement.json → notify leader)
+  startImprovementScanner(config, (team, channelId, systemMessage) => {
+    const triggerMsg: ConversationMessage = {
+      teamId: 'system',
+      teamName: 'System',
+      content: systemMessage,
+      timestamp: new Date(),
+      mentions: [team.id],
+    };
+    addMessage(channelId, triggerMsg);
+    handleTeamInvocation(team, triggerMsg, channelId, config, env);
+  }, env.workChannelId);
 }
 
 async function handleAdminCommand(
@@ -399,10 +413,13 @@ async function handleTeamInvocation(
     addMessage(channelId, teamMsg);
 
     // If this team's output mentions other teams, invoke them
-    const nextTeams = findMentionedTeams(finalOutput, config);
-    for (const nextTeam of nextTeams) {
-      if (nextTeam.id !== team.id) {
-        handleTeamInvocation(nextTeam, teamMsg, channelId, config, env);
+    // Skip recursive routing for leader — leader loop handles dispatch
+    if (!team.isLeader) {
+      const nextTeams = findMentionedTeams(finalOutput, config);
+      for (const nextTeam of nextTeams) {
+        if (nextTeam.id !== team.id) {
+          handleTeamInvocation(nextTeam, teamMsg, channelId, config, env);
+        }
       }
     }
   } catch (err) {
@@ -411,9 +428,8 @@ async function handleTeamInvocation(
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
     clearInterval(typingInterval);
-    if (team.isLeader) {
-      clearInbox(team.id, config.workspacePath);
-    }
+    // Leader inbox는 leader loop(inbox-compactor.ts)에서만 삭제
+    // 여기서 삭제하면 leader loop가 읽기 전에 유실됨
     markFree(team.id);
   }
 }
