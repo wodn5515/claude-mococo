@@ -147,14 +147,37 @@ export async function buildTeamPrompt(
   return `${template}
 ${sharedRules ? `\n${sharedRules}\n` : ''}
 ## Long-term Memory
-Important knowledge that persists permanently. Only update when you have something worth keeping forever: user preferences, project structure, recurring schedules, key decisions, team capabilities.
+Important knowledge that persists permanently. Only update when you have something worth keeping forever.
+Use these sections to organize:
+\`\`\`
+### 사용자 & 멤버
+(선호도, 역할, 관계, 성향)
+### 프로젝트 & 구조
+(레포, 기술 스택, 아키텍처 결정)
+### 정책 & 규칙
+(팀 내 합의, 업무 프로세스, 반복 일정)
+### 팀 역량
+(각 팀/멤버의 능력, 담당 업무)
+\`\`\`
 ${longTermMemory ? `\n${longTermMemory}\n` : '\n(empty)\n'}
 ## Short-term Memory
 Working context for current tasks. Update every response:
-- Add new relevant info from inbox and your response
+- Add new relevant info from your response
 - Promote important items to long-term memory
 - Delete outdated or useless entries
 - Keep it lean — only what's needed for your next invocation
+Use these sections to organize:
+\`\`\`
+### 진행중 작업
+(현재 태스크, 담당자, 블로커)
+### 최근 결정 & 약속
+(최근 대화에서 나온 합의, 약속)
+### 대기 항목
+(미완료 작업 — 반드시 #ch:channelId 포함. 예: - API 연동 마무리 #ch:123456789)
+### 캐시된 외부 데이터
+(최근 API 조회 결과 + 조회 시각)
+\`\`\`
+**⚠️ 대기 항목에는 반드시 #ch:channelId를 포함하라.** 이 정보가 있어야 자동 실행 루프가 어느 채널에서 작업을 이어할지 알 수 있다.
 ${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
 ## Inbox (messages since your last response)
 ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
@@ -220,6 +243,7 @@ Syntax: \`[discord:action key=value key="quoted value"]\`
 - \`[discord:assign-role role=Developer user=123456789]\` — assign role to user
 - \`[discord:remove-role role=Developer user=123456789]\` — remove role from user
 - \`[discord:list-roles]\` — 서버 역할 목록 조회 (이름, 멤버 수)
+- \`[discord:list-channels]\` — 서버 채널 목록 조회 (카테고리별 그룹핑)
 
 **Permissions (channel/category):**
 - \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel,SendMessages"]\`
@@ -239,6 +263,7 @@ Update your short-term memory at the end of every response. Include the full rep
 This overwrites your short-term memory completely. Keep it lean and up-to-date.
 What to track: ongoing tasks, current blockers, temp context needed for next invocation.
 What NOT to track: conversation text already in history, stable facts (promote those to long-term).
+**⚠️ 미완료 작업은 반드시 "### 대기 항목" 섹션에 #ch:channelId와 함께 기록하라.** 예: \`- API 연동 마무리 #ch:123456789\`
 
 **Long-term Memory (only when needed):**
 When you learn something worth keeping permanently, also output:

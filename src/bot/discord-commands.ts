@@ -236,6 +236,7 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
       case 'edit-long-memory': return await handleEditLongMemory(cmd.params, ctx);
       // Query
       case 'list-roles':      return await handleListRoles(ctx);
+      case 'list-channels':   return await handleListChannels(ctx);
       default:
         console.warn(`[discord-cmd] Unknown command: ${cmd.action}`);
     }
@@ -699,6 +700,58 @@ async function handleListRoles(ctx: CommandContext): Promise<void> {
   const output = roles || '(역할 없음)';
   await ctx.sendAsTeam(ctx.channelId, ctx.team, `**서버 역할 목록:**\n${output}`);
   console.log(`[discord-cmd] Listed ${ctx.guild.roles.cache.size - 1} roles`);
+}
+
+// --- Channel Query Handler ---
+
+async function handleListChannels(ctx: CommandContext): Promise<void> {
+  const { guild } = ctx;
+
+  // Non-category, non-thread channels only
+  const isNonCategory = (c: { type: ChannelType }) =>
+    c.type !== ChannelType.GuildCategory &&
+    c.type !== ChannelType.PublicThread &&
+    c.type !== ChannelType.PrivateThread &&
+    c.type !== ChannelType.AnnouncementThread;
+
+  const categories = guild.channels.cache
+    .filter(c => c.type === ChannelType.GuildCategory)
+    .sort((a, b) => a.position - b.position);
+
+  const uncategorized = guild.channels.cache
+    .filter(c => isNonCategory(c) && !c.parentId)
+    .sort((a, b) => ('position' in a && 'position' in b ? a.position - b.position : 0));
+
+  const lines: string[] = [];
+
+  // Uncategorized channels first
+  if (uncategorized.size > 0) {
+    for (const [, ch] of uncategorized) {
+      const prefix = ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice ? '🔊' : '#';
+      lines.push(`${prefix} ${ch.name}`);
+    }
+  }
+
+  // Categorized channels
+  for (const [, cat] of categories) {
+    lines.push(`\n📁 **${cat.name}**`);
+    const children = guild.channels.cache
+      .filter(c => c.parentId === cat.id && isNonCategory(c))
+      .sort((a, b) => ('position' in a && 'position' in b ? a.position - b.position : 0));
+    if (children.size === 0) {
+      lines.push('  (비어 있음)');
+    } else {
+      for (const [, ch] of children) {
+        const prefix = ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice ? '🔊' : '#';
+        lines.push(`  ${prefix} ${ch.name}`);
+      }
+    }
+  }
+
+  const output = lines.join('\n') || '(채널 없음)';
+  await ctx.sendAsTeam(ctx.channelId, ctx.team, `**서버 채널 목록:**\n${output}`);
+  const totalChannels = guild.channels.cache.filter(c => isNonCategory(c)).size;
+  console.log(`[discord-cmd] Listed ${totalChannels} channels`);
 }
 
 // --- Persona Handler ---
