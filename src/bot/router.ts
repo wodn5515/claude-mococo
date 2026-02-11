@@ -7,17 +7,6 @@ export function findMentionedTeams(
 ): TeamConfig[] {
   const mentioned: TeamConfig[] = [];
   for (const team of Object.values(config.teams)) {
-    // Match @TeamName or @teamId
-    const pattern = new RegExp(`@${team.name}\\b`, 'i');
-    if (pattern.test(content)) {
-      mentioned.push(team);
-      continue;
-    }
-    const idPattern = new RegExp(`@${team.id}\\b`, 'i');
-    if (idPattern.test(content)) {
-      mentioned.push(team);
-      continue;
-    }
     // Match Discord mention format <@discordUserId>
     if (team.discordUserId && content.includes(`<@${team.discordUserId}>`)) {
       mentioned.push(team);

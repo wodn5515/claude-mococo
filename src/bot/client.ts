@@ -18,12 +18,12 @@ export const teamClients = new Map<string, Client>();
 // Inbox helpers — append chat to a team's inbox file for memory processing
 // ---------------------------------------------------------------------------
 
-function appendToInbox(teamId: string, from: string, content: string, workspacePath: string) {
+function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
   const dir = path.resolve(workspacePath, '.mococo/inbox');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.resolve(dir, `${teamId}.md`);
   const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  fs.appendFileSync(file, `[${ts}] ${from}: ${content}\n`);
+  fs.appendFileSync(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
 }
 
 function clearInbox(teamId: string, workspacePath: string) {
@@ -242,7 +242,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         addMessage(msg.channelId, humanMsg);
 
         // Leader reads every message — append to inbox for memory processing
-        appendToInbox(team.id, msg.author.displayName, content, config.workspacePath);
+        appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId);
 
         // If user @mentioned a specific bot, let that bot's own handler deal with it
         if (mentionsOtherBot) return;
@@ -264,7 +264,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           mentions: [team.id],
         };
         addMessage(msg.channelId, humanMsg);
-        appendToInbox(team.id, msg.author.displayName, content, config.workspacePath);
         handleTeamInvocation(team, humanMsg, msg.channelId, config, env);
       }
     });
@@ -274,7 +273,17 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   }
 
   // Start periodic background tasks
-  startInboxCompactor(config);
+  startInboxCompactor(config, env, (team, channelId, systemMessage) => {
+    const triggerMsg: ConversationMessage = {
+      teamId: 'system',
+      teamName: 'System',
+      content: systemMessage,
+      timestamp: new Date(),
+      mentions: [team.id],
+    };
+    addMessage(channelId, triggerMsg);
+    handleTeamInvocation(team, triggerMsg, channelId, config, env);
+  });
   startMemoryConsolidator(config);
 }
 
@@ -389,15 +398,6 @@ async function handleTeamInvocation(
     };
     addMessage(channelId, teamMsg);
 
-    // Append this bot's response to all other teams' inboxes
-    if (finalOutput) {
-      for (const otherTeam of Object.values(config.teams)) {
-        if (otherTeam.id !== team.id) {
-          appendToInbox(otherTeam.id, team.name, finalOutput, config.workspacePath);
-        }
-      }
-    }
-
     // If this team's output mentions other teams, invoke them
     const nextTeams = findMentionedTeams(finalOutput, config);
     for (const nextTeam of nextTeams) {
@@ -411,7 +411,9 @@ async function handleTeamInvocation(
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
     clearInterval(typingInterval);
-    clearInbox(team.id, config.workspacePath);
+    if (team.isLeader) {
+      clearInbox(team.id, config.workspacePath);
+    }
     markFree(team.id);
   }
 }
