@@ -4,7 +4,6 @@ import { spawn } from 'node:child_process';
 import type { TeamsConfig, TeamConfig } from '../types.js';
 
 const SCAN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const MONITOR_INTERVAL_MS = 60_000;       // 60 seconds
 
 type InvocationTrigger = (team: TeamConfig, channelId: string, systemMessage: string) => void;
 
@@ -80,12 +79,16 @@ function runGit(args: string[], cwd: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// scanRepoFiles -- list files sorted by oldest modification first
+// scanRepoFiles -- list recently changed files, sorted by change frequency
+// Strategy: recent N commits → changed files → deduplicate → sort by frequency
 // ---------------------------------------------------------------------------
 
+const RECENT_COMMITS_COUNT = 30; // Analyze last 30 commits
+
 interface FileEntry {
-  filePath: string;     // relative path within repo
-  lastModified: number; // unix timestamp
+  filePath: string;       // relative path within repo
+  changeCount: number;    // how many times changed in recent commits
+  lastModified: number;   // unix timestamp of most recent change
 }
 
 function isScannableFile(filePath: string): boolean {
@@ -98,13 +101,12 @@ function isScannableFile(filePath: string): boolean {
 }
 
 async function scanRepoFiles(repoPath: string): Promise<FileEntry[]> {
-  // Get all tracked files with their last commit timestamp
-  // Using: git log --all --format="%at" --name-only --diff-filter=ACMR
-  // Then parse to get the most recent timestamp per file
+  // Get files changed in recent N commits with timestamps
+  // git log -N --format="%at" --name-only --diff-filter=ACMR
   let output: string;
   try {
     output = await runGit(
-      ['log', '--all', '--format=%at', '--name-only', '--diff-filter=ACMR'],
+      ['log', `-${RECENT_COMMITS_COUNT}`, '--format=%at', '--name-only', '--diff-filter=ACMR'],
       repoPath,
     );
   } catch {
@@ -113,44 +115,47 @@ async function scanRepoFiles(repoPath: string): Promise<FileEntry[]> {
 
   if (!output) return [];
 
-  const fileTimestamps = new Map<string, number>();
+  // Track change frequency and latest timestamp per file
+  const fileStats = new Map<string, { changeCount: number; lastModified: number }>();
   let currentTimestamp = 0;
 
   for (const line of output.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // Lines that are pure numbers are timestamps
     if (/^\d+$/.test(trimmed)) {
       currentTimestamp = parseInt(trimmed, 10);
       continue;
     }
 
-    // Otherwise it's a file path
     const filePath = trimmed;
     if (!isScannableFile(filePath)) continue;
 
-    // Keep the most recent timestamp per file
-    const existing = fileTimestamps.get(filePath);
-    if (!existing || currentTimestamp > existing) {
-      fileTimestamps.set(filePath, currentTimestamp);
+    const existing = fileStats.get(filePath);
+    if (existing) {
+      existing.changeCount++;
+      if (currentTimestamp > existing.lastModified) {
+        existing.lastModified = currentTimestamp;
+      }
+    } else {
+      fileStats.set(filePath, { changeCount: 1, lastModified: currentTimestamp });
     }
   }
 
-  // Convert to array and sort by oldest first
+  // Convert to array, verify existence, sort by change frequency (descending)
   const entries: FileEntry[] = [];
-  for (const [filePath, lastModified] of fileTimestamps) {
-    // Verify file still exists on disk
+  for (const [filePath, stats] of fileStats) {
     const fullPath = path.join(repoPath, filePath);
     try {
       fs.accessSync(fullPath, fs.constants.R_OK);
-      entries.push({ filePath, lastModified });
+      entries.push({ filePath, changeCount: stats.changeCount, lastModified: stats.lastModified });
     } catch {
       // File was deleted; skip
     }
   }
 
-  entries.sort((a, b) => a.lastModified - b.lastModified);
+  // Most frequently changed files first (hotspots)
+  entries.sort((a, b) => b.changeCount - a.changeCount || b.lastModified - a.lastModified);
   return entries;
 }
 
@@ -173,7 +178,7 @@ function buildScanPrompt(repoName: string, files: { filePath: string; content: s
     .join('\n\n');
 
   return `You are a senior code reviewer analyzing files from the "${repoName}" repository.
-These files have not been modified recently and may need attention.
+These files have been frequently modified recently and are potential hotspots that may need attention.
 
 ## Files to Analyze
 
@@ -250,7 +255,7 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
       const files = await scanRepoFiles(repoPath);
       if (files.length === 0) continue;
 
-      // Take top 20 oldest-modified files
+      // Take top 20 most frequently changed files (hotspots)
       const targetFiles = files.slice(0, 20);
 
       // Read first 100 lines of each file
@@ -345,7 +350,7 @@ function parseHaikuOutput(output: string): IssueItem[] {
 }
 
 // ---------------------------------------------------------------------------
-// improvementMonitorLoop -- leader notification on new issues
+// notifyLeaderOfNewIssues -- event-driven leader notification after scan
 // ---------------------------------------------------------------------------
 
 let previousIssueKeys = new Set<string>();
@@ -354,17 +359,89 @@ function issueKey(issue: { file: string; repo: string; type: string; description
   return `${issue.repo}::${issue.file}::${issue.type}::${issue.description}`;
 }
 
-export function improvementMonitorLoop(
+/**
+ * Check improvement.json for new issues and notify leader.
+ * Called once after each scan completes (event-driven, not polling).
+ */
+function notifyLeaderOfNewIssues(
   config: TeamsConfig,
   triggerInvocation: InvocationTrigger,
   improvementChannelId?: string,
 ): void {
-  console.log('[improvement-monitor] Started (interval: 60s)');
-
   const ws = config.workspacePath;
   const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
 
-  // Initialize previous keys from existing file if present
+  try {
+    const raw = fs.readFileSync(improvementPath, 'utf-8');
+    const data = JSON.parse(raw) as {
+      lastScanAt: string;
+      issues: { file: string; repo: string; type: string; severity: string; description: string; suggestion: string; detectedAt: string }[];
+    };
+
+    if (!data.issues || !Array.isArray(data.issues)) return;
+
+    // Find new issues not seen before
+    const currentKeys = new Set<string>();
+    const newIssues: typeof data.issues = [];
+
+    for (const issue of data.issues) {
+      const key = issueKey(issue);
+      currentKeys.add(key);
+      if (!previousIssueKeys.has(key)) {
+        newIssues.push(issue);
+      }
+    }
+
+    // Update tracked keys
+    previousIssueKeys = currentKeys;
+
+    if (newIssues.length === 0) {
+      console.log('[improvement-monitor] No new issues detected');
+      return;
+    }
+
+    // Find leader team
+    const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+    if (!leaderTeam) return;
+
+    // Write summary to leader inbox for leader loop to pick up
+    if (!improvementChannelId) {
+      const inboxDir = path.resolve(ws, '.mococo/inbox');
+      fs.mkdirSync(inboxDir, { recursive: true });
+      const leaderInbox = path.resolve(inboxDir, `${leaderTeam.id}.md`);
+      const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+      const highCount = newIssues.filter(i => i.severity === 'high').length;
+      const summary = newIssues.slice(0, 5).map(i =>
+        `  - [${i.severity}] ${i.repo}/${i.file}: ${i.description}`
+      ).join('\n');
+
+      const entry = `[${ts} #ch:system] improvement-scanner: ${newIssues.length}개 코드 개선 항목 발견 (high: ${highCount})\n${summary}\n`;
+      fs.appendFileSync(leaderInbox, entry);
+      console.log(`[improvement-monitor] Wrote ${newIssues.length} new issue(s) to leader inbox`);
+    } else {
+      const systemMessage = `[개선사항 발견] ${newIssues.length}개 코드 개선 항목 — 검토 및 작업 배정 필요`;
+      console.log(`[improvement-monitor] ${systemMessage}`);
+      triggerInvocation(leaderTeam, improvementChannelId, systemMessage);
+    }
+  } catch {
+    // File doesn't exist or is malformed; silently continue
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point -- start improvement scanner
+// ---------------------------------------------------------------------------
+
+export function startImprovementScanner(
+  config: TeamsConfig,
+  triggerInvocation: InvocationTrigger,
+  improvementChannelId?: string,
+): void {
+  console.log('[improvement-scanner] Started (interval: 30min, event-driven notify)');
+
+  // Initialize previous issue keys from existing file
+  const improvementPath = path.resolve(config.workspacePath, '.mococo/inbox/improvement.json');
   try {
     const raw = fs.readFileSync(improvementPath, 'utf-8');
     const data = JSON.parse(raw) as { issues?: { file: string; repo: string; type: string; description: string }[] };
@@ -377,87 +454,22 @@ export function improvementMonitorLoop(
     // No existing file, start clean
   }
 
-  setInterval(() => {
-    try {
-      const raw = fs.readFileSync(improvementPath, 'utf-8');
-      const data = JSON.parse(raw) as {
-        lastScanAt: string;
-        issues: { file: string; repo: string; type: string; severity: string; description: string; suggestion: string; detectedAt: string }[];
-      };
-
-      if (!data.issues || !Array.isArray(data.issues)) return;
-
-      // Find new issues not seen before
-      const currentKeys = new Set<string>();
-      const newIssues: typeof data.issues = [];
-
-      for (const issue of data.issues) {
-        const key = issueKey(issue);
-        currentKeys.add(key);
-        if (!previousIssueKeys.has(key)) {
-          newIssues.push(issue);
-        }
-      }
-
-      // Update tracked keys
-      previousIssueKeys = currentKeys;
-
-      if (newIssues.length === 0) return;
-
-      // Find leader team
-      const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
-      if (!leaderTeam) return;
-
-      // Write summary to leader inbox for leader loop to pick up
-      if (!improvementChannelId) {
-        const inboxDir = path.resolve(ws, '.mococo/inbox');
-        fs.mkdirSync(inboxDir, { recursive: true });
-        const leaderInbox = path.resolve(inboxDir, `${leaderTeam.id}.md`);
-        const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-
-        const highCount = newIssues.filter(i => i.severity === 'high').length;
-        const summary = newIssues.slice(0, 5).map(i =>
-          `  - [${i.severity}] ${i.repo}/${i.file}: ${i.description}`
-        ).join('\n');
-
-        const entry = `[${ts} #ch:system] improvement-scanner: ${newIssues.length}개 코드 개선 항목 발견 (high: ${highCount})\n${summary}\n`;
-        fs.appendFileSync(leaderInbox, entry);
-        console.log(`[improvement-monitor] Wrote ${newIssues.length} new issue(s) to leader inbox`);
-      } else {
-        const systemMessage = `[개선사항 발견] ${newIssues.length}개 코드 개선 항목 — 검토 및 작업 배정 필요`;
-        console.log(`[improvement-monitor] ${systemMessage}`);
-        triggerInvocation(leaderTeam, improvementChannelId, systemMessage);
-      }
-    } catch {
-      // File doesn't exist or is malformed; silently continue
-    }
-  }, MONITOR_INTERVAL_MS);
-}
-
-// ---------------------------------------------------------------------------
-// Main entry point -- start improvement scanner
-// ---------------------------------------------------------------------------
-
-export function startImprovementScanner(
-  config: TeamsConfig,
-  triggerInvocation: InvocationTrigger,
-  improvementChannelId?: string,
-): void {
-  console.log('[improvement-scanner] Started (interval: 30min)');
+  // Scan → notify leader (event-driven: notify runs immediately after scan completes)
+  async function runScanAndNotify(): Promise<void> {
+    await improvementLoop(config);
+    notifyLeaderOfNewIssues(config, triggerInvocation, improvementChannelId);
+  }
 
   // Run first scan after 2 minutes (let system settle)
   setTimeout(() => {
-    improvementLoop(config).catch(err => {
+    runScanAndNotify().catch(err => {
       console.error(`[improvement-scanner] Unhandled error: ${err}`);
     });
 
     setInterval(() => {
-      improvementLoop(config).catch(err => {
+      runScanAndNotify().catch(err => {
         console.error(`[improvement-scanner] Unhandled error: ${err}`);
       });
     }, SCAN_INTERVAL_MS);
   }, 2 * 60_000);
-
-  // Start monitoring loop for leader notification
-  improvementMonitorLoop(config, triggerInvocation, improvementChannelId);
 }
