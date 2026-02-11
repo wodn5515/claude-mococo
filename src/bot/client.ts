@@ -8,6 +8,7 @@ import { isBusy, markBusy, markFree, waitForFree, getStatus } from '../teams/con
 import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import { startInboxCompactor } from './inbox-compactor.js';
+import { startMemoryConsolidator } from './memory-consolidator.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '../types.js';
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
@@ -272,8 +273,9 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     await client.login(team.discordToken);
   }
 
-  // Start periodic inbox compaction
+  // Start periodic background tasks
   startInboxCompactor(config);
+  startMemoryConsolidator(config);
 }
 
 async function handleAdminCommand(
