@@ -31,6 +31,21 @@ export class ClaudeEngine extends BaseEngine {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    // Track both readline close and process exit to avoid race conditions.
+    // The 'result' event may arrive in the last stdout line — readline must
+    // finish processing before we emit 'exit', otherwise the invoker rejects
+    // the promise before the result is received.
+    let exitCode: number | null = null;
+    let rlClosed = false;
+    let procExited = false;
+
+    const maybeEmitExit = () => {
+      if (rlClosed && procExited) {
+        if (this.mcpConfigPath) cleanupMcpConfig(this.opts.teamId, this.opts.cwd);
+        this.emit('exit', exitCode);
+      }
+    };
+
     const rl = readline.createInterface({ input: this.proc.stdout! });
     rl.on('line', (line) => {
       try {
@@ -42,6 +57,10 @@ export class ClaudeEngine extends BaseEngine {
         console.log(`[claude:${this.opts.teamId}] stdout: ${line.slice(0, 200)}`);
       }
     });
+    rl.on('close', () => {
+      rlClosed = true;
+      maybeEmitExit();
+    });
 
     // Log stderr so we can see Claude errors
     const stderrRl = readline.createInterface({ input: this.proc.stderr! });
@@ -51,8 +70,9 @@ export class ClaudeEngine extends BaseEngine {
 
     this.proc.on('exit', (code) => {
       console.log(`[claude:${this.opts.teamId}] exited with code ${code}`);
-      if (this.mcpConfigPath) cleanupMcpConfig(this.opts.teamId, this.opts.cwd);
-      this.emit('exit', code);
+      exitCode = code;
+      procExited = true;
+      maybeEmitExit();
     });
   }
 
