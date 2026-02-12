@@ -36,6 +36,24 @@ let heartbeatRunning = false;
 // Cooldown tracker for pending task loop — tracks last invoke time per team
 const pendingTaskCooldowns = new Map<string, number>();
 
+// Nudge counter for follow-up loop — tracks how many nudges sent per dispatch record
+const nudgeCounts = new Map<string, number>();
+const MAX_NUDGES_PER_RECORD = 2;
+
+// Cooldown tracker for follow-up loop — tracks last nudge time per team
+const followUpCooldowns = new Map<string, number>();
+const FOLLOW_UP_COOLDOWN_MS = 30 * 60_000; // 30 minutes cooldown per team
+
+function isFollowUpOnCooldown(teamId: string): boolean {
+  const lastNudge = followUpCooldowns.get(teamId);
+  if (!lastNudge) return false;
+  return Date.now() - lastNudge < FOLLOW_UP_COOLDOWN_MS;
+}
+
+function setFollowUpCooldown(teamId: string): void {
+  followUpCooldowns.set(teamId, Date.now());
+}
+
 function isPendingTaskOnCooldown(teamId: string): boolean {
   const lastInvoke = pendingTaskCooldowns.get(teamId);
   if (!lastInvoke) return false;
@@ -199,9 +217,22 @@ async function followUpLoop(
     // Already queued → don't pile on
     if (isQueued(team.id)) continue;
 
+    // Cooldown check — don't nudge same team too frequently
+    if (isFollowUpOnCooldown(team.id)) continue;
+
+    // Check nudge count — auto-resolve if exceeded max nudges
+    const currentNudges = nudgeCounts.get(record.id) ?? 0;
+    if (currentNudges >= MAX_NUDGES_PER_RECORD) {
+      console.log(`[follow-up] Max nudges (${MAX_NUDGES_PER_RECORD}) reached for ${team.name}, auto-resolving record`);
+      record.resolved = true;
+      record.resolvedAt = Date.now();
+      nudgeCounts.delete(record.id);
+      continue;
+    }
+
     if (elapsedMin < 15) {
       // 5-15 min: nudge the team to report
-      console.log(`[follow-up] Nudging ${team.name} to report (${Math.round(elapsedMin)}min since dispatch)`);
+      console.log(`[follow-up] Nudging ${team.name} to report (${Math.round(elapsedMin)}min since dispatch, nudge ${currentNudges + 1}/${MAX_NUDGES_PER_RECORD})`);
       const nudgeMsg: ConversationMessage = {
         teamId: 'system',
         teamName: 'System',
@@ -211,9 +242,11 @@ async function followUpLoop(
       };
       addMessage(record.channelId, nudgeMsg);
       triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
+      nudgeCounts.set(record.id, currentNudges + 1);
+      setFollowUpCooldown(team.id);
       break; // One nudge per cycle
     } else {
-      // 15min+: notify leader
+      // 15min+: notify leader (only once, then auto-resolve)
       const leader = Object.values(config.teams).find(t => t.isLeader);
       if (leader && !isBusy(leader.id) && !isQueued(leader.id)) {
         console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min`);
@@ -233,6 +266,7 @@ async function followUpLoop(
       if (elapsedMin > 60) {
         record.resolved = true;
         record.resolvedAt = Date.now();
+        nudgeCounts.delete(record.id);
       }
     }
   }

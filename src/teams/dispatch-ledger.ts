@@ -31,12 +31,16 @@ class DispatchLedger {
 
   /**
    * Mark records resolved when toTeam's output mentions fromTeam.
+   * For system-dispatched records (fromTeam='system'), any response from toTeam
+   * auto-resolves since teams cannot mention 'system'.
    */
   resolve(toTeam: string, mentionedTeamIds: string[]): void {
     for (const rec of this.records) {
-      if (rec.toTeam === toTeam && !rec.resolved && mentionedTeamIds.includes(rec.fromTeam)) {
-        rec.resolved = true;
-        rec.resolvedAt = Date.now();
+      if (rec.toTeam === toTeam && !rec.resolved) {
+        if (rec.fromTeam === 'system' || mentionedTeamIds.includes(rec.fromTeam)) {
+          rec.resolved = true;
+          rec.resolvedAt = Date.now();
+        }
       }
     }
   }
