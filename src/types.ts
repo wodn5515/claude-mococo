@@ -92,6 +92,8 @@ export interface ChainContext {
 // Dispatch ledger — track dispatched work for follow-up
 // ---------------------------------------------------------------------------
 
+/** Tracks work dispatched between teams for follow-up.
+ * `resolvedAt` is only set when `resolved` is true. */
 export interface DispatchRecord {
   id: string;
   chainId: string;
@@ -100,6 +102,7 @@ export interface DispatchRecord {
   channelId: string;
   reason: string;
   dispatchedAt: number;
+  /** Set only when resolved=true. */
   resolvedAt?: number;
   resolved: boolean;
 }

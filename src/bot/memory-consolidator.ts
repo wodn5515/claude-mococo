@@ -20,15 +20,30 @@ function atomicWriteSync(filePath: string, content: string): void {
 const CONSOLIDATE_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIZE_THRESHOLD_BYTES = 3 * 1024; // 3KB
 const EPISODE_AGE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
+const MAX_MEMORY_INPUT_BYTES = 5 * 1024; // 5KB per memory section to avoid Haiku token overflow
+
+function truncateMemory(content: string, maxBytes: number): string {
+  if (Buffer.byteLength(content, 'utf-8') <= maxBytes) return content;
+  const lines = content.split('\n');
+  let size = 0;
+  let cutIdx = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    size += Buffer.byteLength(lines[i] + '\n', 'utf-8');
+    if (size > maxBytes) { cutIdx = i; break; }
+  }
+  return lines.slice(0, cutIdx).join('\n') + '\n... (truncated)';
+}
 
 function buildConsolidatePrompt(teamName: string, shortTerm: string, longTerm: string): string {
+  const safeShort = truncateMemory(shortTerm, MAX_MEMORY_INPUT_BYTES);
+  const safeLong = truncateMemory(longTerm, MAX_MEMORY_INPUT_BYTES);
   return `You are consolidating memory for team member "${teamName}".
 
 ## Current Long-term Memory
-${longTerm || '(empty)'}
+${safeLong || '(empty)'}
 
 ## Current Short-term Memory
-${shortTerm || '(empty)'}
+${safeShort || '(empty)'}
 
 ## Task
 Review the short-term memory and make these decisions for each piece of information:
@@ -67,15 +82,24 @@ function parseConsolidateResult(stdout: string): { longTerm: string; shortTerm: 
   };
 }
 
-const consolidationLocks = new Set<string>();
+// Per-team Promise chain for async-safe mutual exclusion
+const teamLocks = new Map<string, Promise<void>>();
+
+function withTeamLock(teamId: string, fn: () => Promise<void>): Promise<void> {
+  const prev = teamLocks.get(teamId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // run fn after previous completes (even if it rejected)
+  teamLocks.set(teamId, next);
+  // Clean up when chain settles to avoid memory leak
+  next.then(() => {
+    if (teamLocks.get(teamId) === next) teamLocks.delete(teamId);
+  }, () => {
+    if (teamLocks.get(teamId) === next) teamLocks.delete(teamId);
+  });
+  return next;
+}
 
 async function consolidateTeam(teamId: string, teamName: string, config: TeamsConfig): Promise<void> {
-  if (consolidationLocks.has(teamId)) {
-    console.log(`[memory-consolidator] Skipping ${teamName} — consolidation already in progress`);
-    return;
-  }
-  consolidationLocks.add(teamId);
-  try {
+  return withTeamLock(teamId, async () => {
     const ws = config.workspacePath;
     const memoryDir = path.resolve(ws, '.mococo/memory', teamId);
     const shortTermPath = path.resolve(memoryDir, 'short-term.md');
@@ -102,9 +126,7 @@ async function consolidateTeam(teamId: string, teamName: string, config: TeamsCo
 
     const promoted = result.longTerm && result.longTerm !== longTerm;
     console.log(`[memory-consolidator] Consolidated ${teamName}: short-term ${shortTerm.length}→${result.shortTerm.length} chars${promoted ? ', promoted items to long-term' : ''}`);
-  } finally {
-    consolidationLocks.delete(teamId);
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +134,7 @@ async function consolidateTeam(teamId: string, teamName: string, config: TeamsCo
 // ---------------------------------------------------------------------------
 
 async function compactEpisodes(teamId: string, teamName: string, config: TeamsConfig): Promise<void> {
+  return withTeamLock(teamId, async () => {
   const filePath = path.resolve(config.workspacePath, '.mococo/memory', teamId, 'episodes.jsonl');
 
   let lines: string[];
@@ -171,6 +194,7 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
   atomicWriteSync(filePath, newLines.join('\n') + '\n');
 
   console.log(`[memory-consolidator] Compacted ${old.length} old episodes for ${teamName} → 1 summary`);
+  });
 }
 
 // ---------------------------------------------------------------------------
