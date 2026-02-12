@@ -367,7 +367,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 
       // Delay slightly so the reply is sent before the process exits
       setTimeout(() => {
-        exec('systemctl --user restart claude-mococo.service', (err, stdout, stderr) => {
+        const restartCmd = process.platform === 'darwin'
+          ? 'launchctl kickstart -k gui/$(id -u)/com.mococo.claude-mococo'
+          : 'systemctl --user restart claude-mococo.service';
+
+        exec(restartCmd, (err, stdout, stderr) => {
           if (err) {
             console.error(`[restart] Failed: ${err.message}`);
             // Process may already be dying, but try to notify
