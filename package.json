@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts",
+    "dev": "nodemon --watch src --ext ts,json --exec 'npm run build && node dist/cli/index.js start'",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
@@ -21,8 +21,9 @@
     "dotenv": "^16.4.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "nodemon": "^3.1.11",
     "tsx": "^4.19.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.6.0"
   }
 }
