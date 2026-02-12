@@ -359,21 +359,54 @@ async function hrEvaluationLoop(
       return;
     }
 
+    // Read and clear activity log (atomic rename to prevent data loss)
+    const logFile = path.resolve(config.workspacePath, '.mococo/hr-logs/activity-log.jsonl');
+    const tmpFile = logFile + '.processing';
+    let activityLog = '';
+    try {
+      fs.renameSync(logFile, tmpFile);
+      activityLog = fs.readFileSync(tmpFile, 'utf-8').trim();
+      fs.unlinkSync(tmpFile);
+    } catch {
+      // File doesn't exist or empty — no activity
+    }
+
+    if (!activityLog) {
+      console.log('[hr-eval] No activity log entries, skipping evaluation');
+      return;
+    }
+
+    // Parse and format log entries for the prompt
+    const entries = activityLog.split('\n').filter(Boolean);
+    const formattedLines: string[] = [];
+    for (const line of entries) {
+      try {
+        const e = JSON.parse(line) as { ts: number; channelId: string; author: string; teamId: string; content: string };
+        const time = new Date(e.ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        formattedLines.push(`[${time}] ${e.author}: ${e.content}`);
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
     const fromTime = new Date(Date.now() - HR_EVAL_MS).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
     const toTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
 
+    const MAX_LOG_LINES = 200;
+    const trimmedLines = formattedLines.length > MAX_LOG_LINES ? formattedLines.slice(-MAX_LOG_LINES) : formattedLines;
+    const logSummary = trimmedLines.join('\n');
     const systemMsg: ConversationMessage = {
       teamId: 'system',
       teamName: 'System',
-      content: `[정기 업무평가] 최근 2시간(${fromTime}~${toTime}) 동안의 Discord 메시지를 분석하여 각 모코코 팀원의 업무 활동을 평가하고, 회장님(<@401573048353816587>)께 보고하세요. 평가 항목: 작업량, 품질, 협업, 자율성. 메시지가 없거나 활동이 없는 팀원도 포함하여 보고하세요.`,
+      content: `[정기 업무평가] 최근 활동 기간(${fromTime}~${toTime}) 로그를 기반으로 각 모코코 팀원의 업무 활동을 평가하고, 회장님(<@401573048353816587>)께 보고하세요.\n\n--- 활동 로그 ---\n${logSummary}\n--- 로그 끝 ---\n\n평가 항목: 작업량, 품질, 협업, 자율성. 로그에 기록이 없는 팀원은 "활동 없음"으로 표시하세요.`,
       timestamp: new Date(),
       mentions: [hrTeam.id],
     };
     addMessage(channelId, systemMsg);
-    await sendAsTeam(channelId, hrTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[hr-eval] sendAsTeam failed:', err instanceof Error ? err.message : err));
+    await sendAsTeam(channelId, hrTeam, `📋 [정기 업무평가] ${fromTime}~${toTime} 활동 로그 기반 평가를 시작합니다.`).catch(err => console.warn('[hr-eval] sendAsTeam failed:', err instanceof Error ? err.message : err));
     triggerInvocation(hrTeam, systemMsg, channelId, config, env, newChain());
 
-    console.log(`[hr-eval] HR evaluation triggered for period ${fromTime}~${toTime}`);
+    console.log(`[hr-eval] HR evaluation triggered with ${entries.length} log entries for period ${fromTime}~${toTime}`);
   } catch (err) {
     console.error(`[hr-eval] Error: ${err}`);
   }

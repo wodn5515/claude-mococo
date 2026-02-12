@@ -28,6 +28,21 @@ const DEFAULT_CHAIN_BUDGET = 20;
 export const teamClients = new Map<string, Client>();
 
 // ---------------------------------------------------------------------------
+// HR activity log — append chat messages for HR evaluation
+// ---------------------------------------------------------------------------
+
+export function appendHrActivityLog(workspacePath: string, entry: { ts: number; channelId: string; author: string; teamId: string; content: string }): void {
+  try {
+    const logDir = path.resolve(workspacePath, '.mococo/hr-logs');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, 'activity-log.jsonl');
+    fs.appendFileSync(logFile, JSON.stringify({ ...entry, content: entry.content.slice(0, 500) }) + '\n');
+  } catch (err) {
+    console.warn('[hr-log] Failed to append:', err instanceof Error ? err.message : err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Inbox helpers — append chat to a team's inbox file for memory processing
 // ---------------------------------------------------------------------------
 
@@ -481,6 +496,13 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           processedMsgIds.set(msg.id, Date.now());
           trimProcessedMsgs();
           addMessage(msg.channelId, humanMsg);
+          appendHrActivityLog(config.workspacePath, {
+            ts: Date.now(),
+            channelId: msg.channelId,
+            author: msg.author.displayName,
+            teamId: 'human',
+            content,
+          });
         }
 
         // Leader reads every message — append to inbox for memory processing
@@ -512,6 +534,13 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           processedMsgIds.set(msg.id, Date.now());
           trimProcessedMsgs();
           addMessage(msg.channelId, humanMsg);
+          appendHrActivityLog(config.workspacePath, {
+            ts: Date.now(),
+            channelId: msg.channelId,
+            author: msg.author.displayName,
+            teamId: 'human',
+            content,
+          });
         }
         handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());
       }
@@ -716,6 +745,15 @@ export async function handleTeamInvocation(
       mentions: mentionedTeams.map(t => t.id),
     };
     addMessage(channelId, teamMsg);
+    if (finalOutput) {
+      appendHrActivityLog(config.workspacePath, {
+        ts: Date.now(),
+        channelId,
+        author: team.name,
+        teamId: team.id,
+        content: finalOutput,
+      });
+    }
 
     // Write episode (await — must complete before markFree to prevent race with compactEpisodes)
     await writeEpisode(
