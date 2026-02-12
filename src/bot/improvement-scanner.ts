@@ -373,21 +373,10 @@ function notifyLeaderOfNewIssues(
     const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
     if (!leaderTeam) return;
 
-    // Write summary to leader inbox for leader loop to pick up
+    // Notify leader of new issues
     if (!improvementChannelId) {
-      const inboxDir = path.resolve(ws, '.mococo/inbox');
-      fs.mkdirSync(inboxDir, { recursive: true });
-      const leaderInbox = path.resolve(inboxDir, `${leaderTeam.id}.md`);
-      const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-
-      const highCount = newIssues.filter(i => i.severity === 'high').length;
-      const summary = newIssues.slice(0, 5).map(i =>
-        `  - [${i.severity}] ${i.repo}/${i.file}: ${i.description}`
-      ).join('\n');
-
-      const entry = `[${ts} #ch:system] improvement-scanner: ${newIssues.length}개 코드 개선 항목 발견 (high: ${highCount})\n${summary}\n`;
-      fs.appendFileSync(leaderInbox, entry);
-      console.log(`[improvement-monitor] Wrote ${newIssues.length} new issue(s) to leader inbox`);
+      // No channel configured — rely on leaderHeartbeat reading improvement.json directly
+      console.log(`[improvement-monitor] ${newIssues.length} new issue(s) detected (no channelId — leaderHeartbeat will pick up from improvement.json)`);
     } else {
       const systemMessage = `[개선사항 발견] ${newIssues.length}개 코드 개선 항목 — 검토 및 작업 배정 필요`;
       console.log(`[improvement-monitor] ${systemMessage}`);
