@@ -571,14 +571,6 @@ export async function handleTeamInvocation(
   markBusy(team.id, triggerMsg.content.slice(0, 50));
   console.log(`[${team.name}] Invoking (chain: ${chain.totalInvocations}/${chain.maxBudget}, trigger: ${triggerMsg.content.slice(0, 80)})`);
 
-  // Send system trigger messages to Discord so activity is visible
-  if (triggerMsg.teamId === 'system') {
-    const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
-    if (leaderTeam) {
-      await sendAsTeam(channelId, leaderTeam, `📋 ${triggerMsg.content}`).catch(() => {});
-    }
-  }
-
   // Pre-read and atomically clear inbox for leader to prevent data loss.
   // Messages arriving during engine execution go to a fresh file and survive.
   let preloadedInbox: string | undefined;

@@ -4,7 +4,7 @@ import { runHaiku } from '../utils/haiku.js';
 import { isBusy, isQueued } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { addMessage } from '../teams/context.js';
-import { newChain } from './client.js';
+import { newChain, sendAsTeam } from './client.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -190,6 +190,7 @@ async function leaderHeartbeat(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
+    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(() => {});
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
     // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
@@ -247,7 +248,9 @@ async function followUpLoop(
         timestamp: new Date(),
         mentions: [team.id],
       };
+      const nudgeLeader = Object.values(config.teams).find(t => t.isLeader);
       addMessage(record.channelId, nudgeMsg);
+      if (nudgeLeader) await sendAsTeam(record.channelId, nudgeLeader, `📋 ${nudgeMsg.content}`).catch(() => {});
       triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
       nudgeCounts.set(record.id, currentNudges + 1);
       setFollowUpCooldown(team.id);
@@ -267,6 +270,7 @@ async function followUpLoop(
         const alertChannelId = env.workChannelId || env.memberTrackingChannelId;
         if (alertChannelId) {
           addMessage(alertChannelId, alertMsg);
+          await sendAsTeam(alertChannelId, leader, `📋 ${alertMsg.content}`).catch(() => {});
           triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
         }
       }
@@ -301,6 +305,7 @@ async function dailyDigest(
     mentions: [leader.id],
   };
   addMessage(digestChannelId, digestMsg);
+  await sendAsTeam(digestChannelId, leader, `📋 ${digestMsg.content}`).catch(() => {});
   triggerInvocation(leader, digestMsg, digestChannelId, config, env, newChain());
 }
 
@@ -399,7 +404,9 @@ async function pendingTaskLoop(
       timestamp: new Date(),
       mentions: [team.id],
     };
+    const pendingLeader = Object.values(config.teams).find(t => t.isLeader);
     addMessage(task.channelId, triggerMsg);
+    if (pendingLeader) await sendAsTeam(task.channelId, pendingLeader, `📋 ${triggerMsg.content}`).catch(() => {});
     triggerInvocation(team, triggerMsg, task.channelId, config, env, newChain());
     setPendingTaskCooldown(team.id);
     invoked++;
@@ -436,7 +443,7 @@ export function startInboxCompactor(
   };
 
   // fs.watch for immediate inbox change detection — A안: bypass haiku triage
-  const immediateLeaderInvoke = () => {
+  const immediateLeaderInvoke = async () => {
     if (isBusy(leaderTeam.id) || isQueued(leaderTeam.id)) {
       console.log('[inbox-compactor] Leader busy/queued, skipping immediate invoke');
       return;
@@ -460,6 +467,7 @@ export function startInboxCompactor(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
+    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(() => {});
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
   };
 
@@ -468,7 +476,9 @@ export function startInboxCompactor(
       if (filename !== `${leaderTeam.id}.md`) return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        immediateLeaderInvoke();
+        immediateLeaderInvoke().catch(err => {
+          console.error(`[inbox-compactor] Immediate invoke error: ${err}`);
+        });
       }, DEBOUNCE_MS);
     });
     console.log(`[inbox-compactor] Watching ${inboxDir} for changes (A안: immediate dispatch)`);
