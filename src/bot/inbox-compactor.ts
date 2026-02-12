@@ -22,6 +22,7 @@ const HEARTBEAT_MS = 10 * 60_000;       // 10 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 30 * 60_000; // 30 minutes cooldown per team
+const HR_EVAL_MS = 2 * 60 * 60_000; // 2 hours
 
 type InvocationHandler = (
   team: TeamConfig,
@@ -333,6 +334,49 @@ async function dailyDigest(
 }
 
 // ---------------------------------------------------------------------------
+// HR evaluation loop — periodic team member performance evaluation
+// ---------------------------------------------------------------------------
+
+async function hrEvaluationLoop(
+  config: TeamsConfig,
+  env: EnvConfig,
+  triggerInvocation: InvocationHandler,
+): Promise<void> {
+  try {
+    const hrTeam = Object.values(config.teams).find(t => t.id === 'hr');
+    if (!hrTeam) return;
+    if (isOccupied(hrTeam.id)) {
+      console.log('[hr-eval] HR team busy/queued, skipping this cycle');
+      return;
+    }
+
+    const channelId = env.workChannelId || env.memberTrackingChannelId;
+    if (!channelId) {
+      console.warn('[hr-eval] No workChannelId or memberTrackingChannelId configured');
+      return;
+    }
+
+    const fromTime = new Date(Date.now() - HR_EVAL_MS).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    const toTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+
+    const systemMsg: ConversationMessage = {
+      teamId: 'system',
+      teamName: 'System',
+      content: `[정기 업무평가] 최근 2시간(${fromTime}~${toTime}) 동안의 Discord 메시지를 분석하여 각 모코코 팀원의 업무 활동을 평가하고, 회장님(<@401573048353816587>)께 보고하세요. 평가 항목: 작업량, 품질, 협업, 자율성. 메시지가 없거나 활동이 없는 팀원도 포함하여 보고하세요.`,
+      timestamp: new Date(),
+      mentions: [hrTeam.id],
+    };
+    addMessage(channelId, systemMsg);
+    await sendAsTeam(channelId, hrTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[hr-eval] sendAsTeam failed:', err instanceof Error ? err.message : err));
+    triggerInvocation(hrTeam, systemMsg, channelId, config, env, newChain());
+
+    console.log(`[hr-eval] HR evaluation triggered for period ${fromTime}~${toTime}`);
+  } catch (err) {
+    console.error(`[hr-eval] Error: ${err}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Pending task loop — check short-term memory for 대기 항목
 // ---------------------------------------------------------------------------
 
@@ -445,7 +489,7 @@ export function startInboxCompactor(
   env: EnvConfig,
   triggerInvocation: InvocationHandler,
 ): void {
-  console.log('[inbox-compactor] Started: fs.watch(immediate) + heartbeat(10m/fallback) + follow-up(2m) + pending(60s) + digest(24h)');
+  console.log('[inbox-compactor] Started: fs.watch(immediate) + heartbeat(10m/fallback) + follow-up(2m) + pending(60s) + digest(24h) + hr-eval(2h)');
 
   const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
   if (!leaderTeam) {
@@ -537,4 +581,19 @@ export function startInboxCompactor(
       });
     }, DAILY_DIGEST_MS);
   }, 60 * 60_000);
+
+  // HR evaluation loop: every 2 hours (first run after 10 minutes)
+  const hrTeamCheck = Object.values(config.teams).find(t => t.id === 'hr');
+  if (hrTeamCheck) {
+    setTimeout(() => {
+      hrEvaluationLoop(config, env, triggerInvocation).catch(err => {
+        console.error(`[hr-eval] Unhandled error: ${err}`);
+      });
+      setInterval(() => {
+        hrEvaluationLoop(config, env, triggerInvocation).catch(err => {
+          console.error(`[hr-eval] Unhandled error: ${err}`);
+        });
+      }, HR_EVAL_MS);
+    }, 10 * 60_000); // First run after 10 minutes
+  }
 }
