@@ -20,6 +20,11 @@ async function main(): Promise<void> {
       await runStart();
       break;
     }
+    case 'dev': {
+      const { runDev } = await import('./commands/dev.js');
+      await runDev();
+      break;
+    }
     case 'list':
     case 'ls': {
       const { runList } = await import('./commands/list.js');
@@ -45,6 +50,7 @@ Usage:
   mococo add               Add an assistant (interactive)
   mococo edit <id>         Edit an assistant's settings
   mococo start             Start all assistants
+  mococo dev               Start in dev mode (auto-rebuild on changes)
   mococo list              List configured assistants
   mococo remove <id>       Remove an assistant
 
