@@ -168,9 +168,7 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
 
   if (old.length < 2) return; // not enough old episodes to compact
 
-  // 방어적 배열 접근 — old가 비어있으면 early return (위 조건과 이중 확인)
   const lastOld = old[old.length - 1];
-  if (!lastOld) return;
 
   const oldSummaries = old.map(ep => `- ${ep.summary} (ch:${ep.channelId})`).join('\n');
 

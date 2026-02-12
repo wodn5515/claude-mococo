@@ -116,8 +116,14 @@ export function loadRecentEpisodes(
     }
   }).filter(Boolean);
   if (parseFailures > 0) {
-    // 손상된 라인 수와 전체 라인 수, 첫 번째 손상 라인 샘플을 함께 출력
     console.warn(`[episode] ${teamId}: ${parseFailures}건의 손상된 라인 스킵됨 (전체 ${recent.length}건 중, 파일: ${filePath}) — 첫 번째 손상: ${firstCorruptedSample}`);
+    // Self-healing: 전체 파일에서 손상 비율이 30% 이상이면 유효한 라인만 재작성
+    const totalCorrupted = lines.filter(l => { try { const e = JSON.parse(l); return typeof e.ts !== 'number' || isNaN(e.ts); } catch { return true; } }).length;
+    if (totalCorrupted > 0 && totalCorrupted / lines.length >= 0.3) {
+      const validLines = lines.filter(l => { try { const e = JSON.parse(l); return typeof e.ts === 'number' && !isNaN(e.ts); } catch { return false; } });
+      atomicWriteSync(filePath, validLines.join('\n') + '\n');
+      console.log(`[episode] ${teamId}: Self-healing — ${totalCorrupted}건 손상 라인 제거, ${validLines.length}건 유지`);
+    }
   }
 
   return formatted.join('\n');
