@@ -216,46 +216,61 @@ export async function processDiscordCommands(
 }
 
 // ---------------------------------------------------------------------------
-// E. Command Handlers
+// E. Command Handler Type & Registry
+// ---------------------------------------------------------------------------
+
+type CommandHandler = (params: Record<string, string>, ctx: CommandContext) => Promise<void>;
+
+const commandRegistry: Record<string, CommandHandler> = {
+  // Channels
+  'create-channel':    handleCreateChannel,
+  'delete-channel':    handleDeleteChannel,
+  'rename-channel':    handleRenameChannel,
+  'set-topic':         handleSetTopic,
+  'move-channel':      handleMoveChannel,
+  // Threads
+  'create-thread':     handleCreateThread,
+  'send-thread':       handleSendThread,
+  'archive-thread':    handleArchiveThread,
+  'lock-thread':       handleLockThread,
+  // Categories
+  'create-category':   handleCreateCategory,
+  'delete-category':   handleDeleteCategory,
+  // Messages
+  'pin-message':       handlePinMessage,
+  'react':             handleReact,
+  'edit-message':      handleEditMessage,
+  'delete-message':    handleDeleteMessage,
+  // Permissions
+  'set-permission':    handleSetPermission,
+  'remove-permission': handleRemovePermission,
+  // Roles
+  'create-role':       handleCreateRole,
+  'delete-role':       handleDeleteRole,
+  'assign-role':       handleAssignRole,
+  'remove-role':       handleRemoveRole,
+  // Persona & Memory
+  'edit-persona':      handleEditPersona,
+  'edit-memory':       handleEditMemory,
+  'edit-long-memory':  handleEditLongMemory,
+  // Decision log
+  'decision-log':      handleDecisionLog,
+  // Query
+  'list-roles':        handleListRoles,
+  'list-channels':     handleListChannels,
+};
+
+// ---------------------------------------------------------------------------
+// F. Command Executor
 // ---------------------------------------------------------------------------
 
 async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<void> {
   try {
-    switch (cmd.action) {
-      case 'create-channel':  return await handleCreateChannel(cmd.params, ctx);
-      case 'delete-channel':  return await handleDeleteChannel(cmd.params, ctx);
-      case 'rename-channel':  return await handleRenameChannel(cmd.params, ctx);
-      case 'set-topic':       return await handleSetTopic(cmd.params, ctx);
-      case 'create-thread':   return await handleCreateThread(cmd.params, ctx);
-      case 'send-thread':     return await handleSendThread(cmd.params, ctx);
-      case 'archive-thread':  return await handleArchiveThread(cmd.params, ctx);
-      case 'lock-thread':     return await handleLockThread(cmd.params, ctx);
-      case 'create-category': return await handleCreateCategory(cmd.params, ctx);
-      case 'delete-category': return await handleDeleteCategory(cmd.params, ctx);
-      case 'move-channel':    return await handleMoveChannel(cmd.params, ctx);
-      case 'pin-message':     return await handlePinMessage(cmd.params, ctx);
-      case 'react':           return await handleReact(cmd.params, ctx);
-      case 'edit-message':    return await handleEditMessage(cmd.params, ctx);
-      case 'delete-message':  return await handleDeleteMessage(cmd.params, ctx);
-      // Permissions
-      case 'set-permission':    return await handleSetPermission(cmd.params, ctx);
-      case 'remove-permission': return await handleRemovePermission(cmd.params, ctx);
-      // Roles
-      case 'create-role':     return await handleCreateRole(cmd.params, ctx);
-      case 'delete-role':     return await handleDeleteRole(cmd.params, ctx);
-      case 'assign-role':     return await handleAssignRole(cmd.params, ctx);
-      case 'remove-role':     return await handleRemoveRole(cmd.params, ctx);
-      // Persona & Memory
-      case 'edit-persona':    return await handleEditPersona(cmd.params, ctx);
-      case 'edit-memory':     return await handleEditMemory(cmd.params, ctx);
-      case 'edit-long-memory': return await handleEditLongMemory(cmd.params, ctx);
-      // Decision log
-      case 'decision-log':    return handleDecisionLog(cmd.params, ctx);
-      // Query
-      case 'list-roles':      return await handleListRoles(ctx);
-      case 'list-channels':   return await handleListChannels(ctx);
-      default:
-        console.warn(`[discord-cmd] Unknown command: ${cmd.action}`);
+    const handler = commandRegistry[cmd.action];
+    if (handler) {
+      await handler(cmd.params, ctx);
+    } else {
+      console.warn(`[discord-cmd] Unknown command: ${cmd.action}`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -724,7 +739,7 @@ async function handleRemoveRole(params: Record<string, string>, ctx: CommandCont
 
 // --- Role Query Handler ---
 
-async function handleListRoles(ctx: CommandContext): Promise<void> {
+async function handleListRoles(_params: Record<string, string>, ctx: CommandContext): Promise<void> {
   const roles = ctx.guild.roles.cache
     .filter(r => r.name !== '@everyone')
     .sort((a, b) => b.position - a.position)
@@ -737,7 +752,7 @@ async function handleListRoles(ctx: CommandContext): Promise<void> {
 
 // --- Channel Query Handler ---
 
-async function handleListChannels(ctx: CommandContext): Promise<void> {
+async function handleListChannels(_params: Record<string, string>, ctx: CommandContext): Promise<void> {
   const { guild } = ctx;
 
   // Non-category, non-thread channels only
@@ -789,7 +804,7 @@ async function handleListChannels(ctx: CommandContext): Promise<void> {
 
 // --- Decision Log Handler ---
 
-function handleDecisionLog(params: Record<string, string>, ctx: CommandContext): void {
+async function handleDecisionLog(params: Record<string, string>, ctx: CommandContext): Promise<void> {
   const level = params._level ?? 'autonomous';
   const reason = params.reason ?? '';
   const action = params.action ?? '';
