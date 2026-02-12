@@ -151,6 +151,9 @@ function parseCommands(output: string): ParsedCommand[] {
   return commands;
 }
 
+// Max length for any single parameter value to prevent abuse
+const MAX_PARAM_VALUE_LENGTH = 2000;
+
 function parseParams(paramStr: string): Record<string, string> {
   const params: Record<string, string> = {};
   // key: 영문자/언더스코어 시작, 이후 영문자/숫자/언더스코어/하이픈만 허용
@@ -158,7 +161,13 @@ function parseParams(paramStr: string): Record<string, string> {
   const re = /([a-zA-Z_][\w-]*)=(?:"([^"]*)"|([\w./:@#,+-]+))/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(paramStr)) !== null) {
-    params[m[1]] = m[2] ?? m[3];
+    let value = m[2] ?? m[3];
+    // Truncate overly long values
+    if (value.length > MAX_PARAM_VALUE_LENGTH) {
+      value = value.slice(0, MAX_PARAM_VALUE_LENGTH);
+      console.warn(`[discord-cmd] Param "${m[1]}" truncated to ${MAX_PARAM_VALUE_LENGTH} chars`);
+    }
+    params[m[1]] = value;
   }
   return params;
 }

@@ -7,8 +7,14 @@ import type { TeamsConfig, Episode } from '../types.js';
 /** Atomic write: write to temp file then rename to avoid corruption on crash. */
 function atomicWriteSync(filePath: string, content: string): void {
   const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, content);
-  fs.renameSync(tmp, filePath);
+  try {
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    // Clean up temp file on failure
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
 }
 
 const CONSOLIDATE_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -61,33 +67,44 @@ function parseConsolidateResult(stdout: string): { longTerm: string; shortTerm: 
   };
 }
 
+const consolidationLocks = new Set<string>();
+
 async function consolidateTeam(teamId: string, teamName: string, config: TeamsConfig): Promise<void> {
-  const ws = config.workspacePath;
-  const memoryDir = path.resolve(ws, '.mococo/memory', teamId);
-  const shortTermPath = path.resolve(memoryDir, 'short-term.md');
-  const longTermPath = path.resolve(memoryDir, 'long-term.md');
-
-  let shortTerm = '';
-  let longTerm = '';
-  try { shortTerm = fs.readFileSync(shortTermPath, 'utf-8').trim(); } catch {}
-  try { longTerm = fs.readFileSync(longTermPath, 'utf-8').trim(); } catch {}
-
-  if (!shortTerm) return;
-
-  const prompt = buildConsolidatePrompt(teamName, shortTerm, longTerm);
-  const output = await runHaiku(prompt);
-  const result = parseConsolidateResult(output);
-  if (!result) return;
-
-  fs.mkdirSync(memoryDir, { recursive: true });
-
-  if (result.longTerm) {
-    atomicWriteSync(longTermPath, result.longTerm);
+  if (consolidationLocks.has(teamId)) {
+    console.log(`[memory-consolidator] Skipping ${teamName} — consolidation already in progress`);
+    return;
   }
-  atomicWriteSync(shortTermPath, result.shortTerm);
+  consolidationLocks.add(teamId);
+  try {
+    const ws = config.workspacePath;
+    const memoryDir = path.resolve(ws, '.mococo/memory', teamId);
+    const shortTermPath = path.resolve(memoryDir, 'short-term.md');
+    const longTermPath = path.resolve(memoryDir, 'long-term.md');
 
-  const promoted = result.longTerm && result.longTerm !== longTerm;
-  console.log(`[memory-consolidator] Consolidated ${teamName}: short-term ${shortTerm.length}→${result.shortTerm.length} chars${promoted ? ', promoted items to long-term' : ''}`);
+    let shortTerm = '';
+    let longTerm = '';
+    try { shortTerm = fs.readFileSync(shortTermPath, 'utf-8').trim(); } catch {}
+    try { longTerm = fs.readFileSync(longTermPath, 'utf-8').trim(); } catch {}
+
+    if (!shortTerm) return;
+
+    const prompt = buildConsolidatePrompt(teamName, shortTerm, longTerm);
+    const output = await runHaiku(prompt);
+    const result = parseConsolidateResult(output);
+    if (!result) return;
+
+    fs.mkdirSync(memoryDir, { recursive: true });
+
+    if (result.longTerm) {
+      atomicWriteSync(longTermPath, result.longTerm);
+    }
+    atomicWriteSync(shortTermPath, result.shortTerm);
+
+    const promoted = result.longTerm && result.longTerm !== longTerm;
+    console.log(`[memory-consolidator] Consolidated ${teamName}: short-term ${shortTerm.length}→${result.shortTerm.length} chars${promoted ? ', promoted items to long-term' : ''}`);
+  } finally {
+    consolidationLocks.delete(teamId);
+  }
 }
 
 // ---------------------------------------------------------------------------

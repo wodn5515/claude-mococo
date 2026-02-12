@@ -82,15 +82,20 @@ export function loadRecentEpisodes(
   }
 
   const recent = lines.slice(-count);
+  let parseFailures = 0;
   const formatted = recent.map(line => {
     try {
       const ep: Episode = JSON.parse(line);
       const ago = formatTimeAgo(Date.now() - ep.ts);
       return `[${ago}] ${ep.summary} (ch:${ep.channelId})`;
     } catch {
+      parseFailures++;
       return null;
     }
   }).filter(Boolean);
+  if (parseFailures > 0) {
+    console.warn(`[episode] ${parseFailures} malformed line(s) skipped in ${teamId} episodes`);
+  }
 
   return formatted.join('\n');
 }

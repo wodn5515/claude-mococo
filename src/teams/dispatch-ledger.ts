@@ -71,8 +71,12 @@ class DispatchLedger {
    */
   private cleanup(): void {
     const cutoff = Date.now() - EXPIRE_MS;
+    const hardCutoff = Date.now() - EXPIRE_MS * 3; // 3 hours: force expire even unresolved
     this.records = this.records
-      .filter(r => r.dispatchedAt > cutoff || !r.resolved)
+      .filter(r => {
+        if (r.dispatchedAt < hardCutoff) return false; // force expire old unresolved
+        return r.dispatchedAt > cutoff || !r.resolved;
+      })
       .slice(-MAX_RECORDS);
   }
 }

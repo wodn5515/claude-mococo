@@ -124,7 +124,14 @@ async function leaderHeartbeat(
     try {
       const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
       const raw = fs.readFileSync(improvementPath, 'utf-8');
-      const data = JSON.parse(raw);
+      if (!raw.trim()) throw Object.assign(new Error('Empty file'), { code: 'EMPTY' });
+      let data: any;
+      try {
+        data = JSON.parse(raw);
+      } catch (parseErr) {
+        console.warn(`[heartbeat] Corrupted improvement.json, skipping: ${parseErr}`);
+        data = { issues: [] };
+      }
       const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
       const high = issues.filter(i => i.severity === 'high');
       const medium = issues.filter(i => i.severity === 'medium');
@@ -212,6 +219,7 @@ async function followUpLoop(
   const unresolved = ledger.getUnresolved();
 
   for (const record of unresolved) {
+    if (record.resolved) continue; // guard against race condition
     const team = config.teams[record.toTeam];
     if (!team) continue;
 

@@ -16,15 +16,24 @@ const EXCLUDED_PATTERNS = [/\.lock$/];
 // Git helper -- run git command via spawn
 // ---------------------------------------------------------------------------
 
+const MAX_GIT_OUTPUT_BYTES = 1024 * 1024; // 1MB limit
+
 function runGit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
 
     let stdout = '';
     let stderr = '';
+    let truncated = false;
 
     child.stdout.on('data', (chunk: Buffer) => {
+      if (truncated) return;
       stdout += chunk.toString();
+      if (stdout.length > MAX_GIT_OUTPUT_BYTES) {
+        stdout = stdout.slice(0, MAX_GIT_OUTPUT_BYTES);
+        truncated = true;
+        console.warn(`[improvement-scanner] git output truncated at ${MAX_GIT_OUTPUT_BYTES} bytes`);
+      }
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -94,6 +103,7 @@ async function scanRepoFiles(repoPath: string): Promise<FileEntry[]> {
 
     const filePath = trimmed;
     if (!isScannableFile(filePath)) continue;
+    if (currentTimestamp === 0) continue; // skip files before first timestamp
 
     const existing = fileStats.get(filePath);
     if (existing) {

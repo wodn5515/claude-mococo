@@ -54,6 +54,10 @@ async function processInboxWriteQueue() {
 
 export function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
   return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
+    }, 30_000);
+
     inboxWriteQueue.push(async () => {
       try {
         const dir = path.resolve(workspacePath, '.mococo/inbox');
@@ -61,8 +65,10 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
         const file = path.resolve(dir, `${teamId}.md`);
         const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
         await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
+        clearTimeout(timeout);
         resolve();
       } catch (err) {
+        clearTimeout(timeout);
         reject(err);
       }
     });
@@ -193,10 +199,16 @@ const registry = new ResourceRegistry();
 
 export async function sendAsTeam(channelId: string, team: TeamConfig, content: string) {
   const client = teamClients.get(team.id);
-  if (!client) return;
+  if (!client) {
+    console.warn(`[sendAsTeam] No client for team ${team.name} (${team.id})`);
+    return;
+  }
 
   const channel = client.channels.cache.get(channelId) as TextChannel | undefined;
-  if (!channel) return;
+  if (!channel) {
+    console.warn(`[sendAsTeam] Channel ${channelId} not found for team ${team.name}`);
+    return;
+  }
 
   const chunks = splitMessage(content, 1900);
   for (const chunk of chunks) {
@@ -228,8 +240,16 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   // history twice (leader + non-leader both receive the same messageCreate event)
   const processedMsgIds = new Map<string, number>(); // msgId → timestamp
   const MAX_TRACKED_MSGS = 1000;
+
+  function trimProcessedMsgs() {
+    if (processedMsgIds.size <= MAX_TRACKED_MSGS) return;
+    // Sort by timestamp and keep only the newest half
+    const entries = [...processedMsgIds.entries()].sort((a, b) => a[1] - b[1]);
+    const toRemove = entries.slice(0, entries.length - Math.floor(MAX_TRACKED_MSGS / 2));
+    for (const [id] of toRemove) processedMsgIds.delete(id);
+  }
+
   setInterval(() => {
-    // Evict entries older than 10 minutes instead of clearing all
     const cutoff = Date.now() - 10 * 60_000;
     for (const [id, ts] of processedMsgIds) {
       if (ts < cutoff) processedMsgIds.delete(id);
@@ -275,7 +295,9 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
               raw.teams[team.id].discordUserId = client.user.id;
               fs.writeFileSync(teamsJsonPath, JSON.stringify(raw, null, 2) + '\n');
             }
-          } catch {}
+          } catch (err) {
+            console.warn(`[client] Failed to sync discordUserId for ${team.name}: ${err}`);
+          }
         }
         console.log(`  ${team.name} bot online as @${client.user.tag}`);
 
@@ -413,10 +435,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         };
         if (!processedMsgIds.has(msg.id)) {
           processedMsgIds.set(msg.id, Date.now());
-          if (processedMsgIds.size > MAX_TRACKED_MSGS) {
-            const oldestKey = processedMsgIds.keys().next().value;
-            if (oldestKey) processedMsgIds.delete(oldestKey);
-          }
+          trimProcessedMsgs();
           addMessage(msg.channelId, humanMsg);
         }
 
@@ -447,10 +466,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         };
         if (!processedMsgIds.has(msg.id)) {
           processedMsgIds.set(msg.id, Date.now());
-          if (processedMsgIds.size > MAX_TRACKED_MSGS) {
-            const oldestKey = processedMsgIds.keys().next().value;
-            if (oldestKey) processedMsgIds.delete(oldestKey);
-          }
+          trimProcessedMsgs();
           addMessage(msg.channelId, humanMsg);
         }
         handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());

@@ -13,8 +13,13 @@ export async function runDev(): Promise<void> {
 
   // Ensure .restart-trigger exists
   const triggerFile = path.join(projectRoot, '.restart-trigger');
-  if (!fs.existsSync(triggerFile)) {
-    fs.writeFileSync(triggerFile, '');
+  try {
+    if (!fs.existsSync(triggerFile)) {
+      fs.writeFileSync(triggerFile, '');
+    }
+  } catch (err) {
+    console.error(`Failed to create trigger file: ${err}`);
+    process.exit(1);
   }
 
   console.log('mococo dev — waiting for restart trigger');
