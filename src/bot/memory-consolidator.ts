@@ -4,6 +4,13 @@ import { runHaiku } from '../utils/haiku.js';
 import { isBusy } from '../teams/concurrency.js';
 import type { TeamsConfig, Episode } from '../types.js';
 
+/** Atomic write: write to temp file then rename to avoid corruption on crash. */
+function atomicWriteSync(filePath: string, content: string): void {
+  const tmp = filePath + '.tmp';
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, filePath);
+}
+
 const CONSOLIDATE_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIZE_THRESHOLD_BYTES = 3 * 1024; // 3KB
 const EPISODE_AGE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
@@ -44,7 +51,7 @@ function parseConsolidateResult(stdout: string): { longTerm: string; shortTerm: 
   const shortMatch = stdout.match(/---SHORT-TERM---\n([\s\S]*?)\n---END-SHORT-TERM---/);
 
   if (!longMatch && !shortMatch) {
-    console.warn(`[memory-consolidator] Could not parse output, skipping`);
+    console.warn(`[memory-consolidator] Could not parse consolidation output (${stdout.length} chars), skipping`);
     return null;
   }
 
@@ -75,9 +82,9 @@ async function consolidateTeam(teamId: string, teamName: string, config: TeamsCo
   fs.mkdirSync(memoryDir, { recursive: true });
 
   if (result.longTerm) {
-    fs.writeFileSync(longTermPath, result.longTerm);
+    atomicWriteSync(longTermPath, result.longTerm);
   }
-  fs.writeFileSync(shortTermPath, result.shortTerm);
+  atomicWriteSync(shortTermPath, result.shortTerm);
 
   const promoted = result.longTerm && result.longTerm !== longTerm;
   console.log(`[memory-consolidator] Consolidated ${teamName}: short-term ${shortTerm.length}→${result.shortTerm.length} chars${promoted ? ', promoted items to long-term' : ''}`);
@@ -111,7 +118,7 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
         recent.push(line);
       }
     } catch {
-      // skip malformed lines
+      console.warn(`[memory-consolidator] Skipping malformed episode line: ${line.slice(0, 100)}`);
     }
   }
 
@@ -138,7 +145,7 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
   };
 
   const newLines = [JSON.stringify(compactedEpisode), ...recent];
-  fs.writeFileSync(filePath, newLines.join('\n') + '\n');
+  atomicWriteSync(filePath, newLines.join('\n') + '\n');
 
   console.log(`[memory-consolidator] Compacted ${old.length} old episodes for ${teamName} → 1 summary`);
 }

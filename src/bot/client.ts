@@ -38,16 +38,18 @@ async function processInboxWriteQueue() {
   if (isProcessingInboxQueue || inboxWriteQueue.length === 0) return;
   isProcessingInboxQueue = true;
 
-  while (inboxWriteQueue.length > 0) {
-    const task = inboxWriteQueue.shift()!;
-    try {
-      await task();
-    } catch (err) {
-      console.error('[inbox-queue] Write failed:', err);
+  try {
+    while (inboxWriteQueue.length > 0) {
+      const task = inboxWriteQueue.shift()!;
+      try {
+        await task();
+      } catch (err) {
+        console.error('[inbox-queue] Write failed:', err);
+      }
     }
+  } finally {
+    isProcessingInboxQueue = false;
   }
-
-  isProcessingInboxQueue = false;
 }
 
 export function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {

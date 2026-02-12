@@ -232,8 +232,7 @@ async function followUpLoop(
     const currentNudges = nudgeCounts.get(record.id) ?? 0;
     if (currentNudges >= MAX_NUDGES_PER_RECORD) {
       console.log(`[follow-up] Max nudges (${MAX_NUDGES_PER_RECORD}) reached for ${team.name}, auto-resolving record`);
-      record.resolved = true;
-      record.resolvedAt = Date.now();
+      ledger.resolveById(record.id);
       nudgeCounts.delete(record.id);
       continue;
     }
@@ -273,8 +272,7 @@ async function followUpLoop(
       }
       // Expire very old records (60min+)
       if (elapsedMin > 60) {
-        record.resolved = true;
-        record.resolvedAt = Date.now();
+        ledger.resolveById(record.id);
         nudgeCounts.delete(record.id);
       }
     }

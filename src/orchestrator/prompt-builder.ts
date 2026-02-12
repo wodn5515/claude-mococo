@@ -115,8 +115,8 @@ export async function buildTeamPrompt(
       fs.renameSync(legacyPath, shortTermPath);
       console.log(`[memory] Migrated ${team.id}.md → ${team.id}/short-term.md`);
     }
-  } catch {
-    // migration failed — not critical
+  } catch (err) {
+    console.warn(`[memory] Legacy migration failed for ${team.id}: ${err}`);
   }
 
   let longTermMemory = '';

@@ -45,6 +45,15 @@ class DispatchLedger {
     }
   }
 
+  /** Resolve a specific record by ID (for system auto-resolution). */
+  resolveById(recordId: string): void {
+    const rec = this.records.find(r => r.id === recordId);
+    if (rec && !rec.resolved) {
+      rec.resolved = true;
+      rec.resolvedAt = Date.now();
+    }
+  }
+
   /**
    * Get unresolved dispatches, optionally filtered by age.
    */
