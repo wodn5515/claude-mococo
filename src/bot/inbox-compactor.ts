@@ -16,6 +16,7 @@ const DEBOUNCE_MS = 2_000;
 const HEARTBEAT_MS = 10 * 60_000;       // 10 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
+const PENDING_TASK_COOLDOWN_MS = 30 * 60_000; // 30 minutes cooldown per team
 
 type InvocationHandler = (
   team: TeamConfig,
@@ -31,6 +32,19 @@ type InvocationHandler = (
 // ---------------------------------------------------------------------------
 
 let heartbeatRunning = false;
+
+// Cooldown tracker for pending task loop — tracks last invoke time per team
+const pendingTaskCooldowns = new Map<string, number>();
+
+function isPendingTaskOnCooldown(teamId: string): boolean {
+  const lastInvoke = pendingTaskCooldowns.get(teamId);
+  if (!lastInvoke) return false;
+  return Date.now() - lastInvoke < PENDING_TASK_COOLDOWN_MS;
+}
+
+function setPendingTaskCooldown(teamId: string): void {
+  pendingTaskCooldowns.set(teamId, Date.now());
+}
 
 // ---------------------------------------------------------------------------
 // Leader heartbeat — haiku triage → leader self-invoke
@@ -259,6 +273,7 @@ interface PendingTask {
 
 function shouldSkipTask(taskLine: string): boolean {
   if (/\[BLOCKED\]/i.test(taskLine)) return true;
+  if (/\[WAITING\]/i.test(taskLine)) return true;
   if (/\[SCHEDULED:(\d{4}-\d{2}-\d{2}|tomorrow)\]/i.test(taskLine)) {
     const match = taskLine.match(/\[SCHEDULED:(\d{4}-\d{2}-\d{2}|tomorrow)\]/i);
     if (match) {
@@ -270,6 +285,8 @@ function shouldSkipTask(taskLine: string): boolean {
       if (scheduledDate > today) return true;
     }
   }
+  // Natural language detection for waiting/completed states
+  if (/(?:대기|지시\s*대기|승인\s*대기|결과\s*대기|판단\s*대기|보고\s*완료|완료\s*보고|리뷰\s*대기|확인\s*대기|답변\s*대기|응답\s*대기)/i.test(taskLine)) return true;
   return false;
 }
 
@@ -312,6 +329,10 @@ async function pendingTaskLoop(
     if (team.isLeader) continue;
     if (isBusy(team.id) || isQueued(team.id)) continue;
     if (invoked >= MAX_INVOCATIONS_PER_CYCLE) break;
+    if (isPendingTaskOnCooldown(team.id)) {
+      console.log(`[pending-task] ${team.name} on cooldown, skipping`);
+      continue;
+    }
 
     const shortTermPath = path.resolve(ws, '.mococo/memory', team.id, 'short-term.md');
     let shortTerm: string;
@@ -338,6 +359,7 @@ async function pendingTaskLoop(
     };
     addMessage(task.channelId, triggerMsg);
     triggerInvocation(team, triggerMsg, task.channelId, config, env, newChain());
+    setPendingTaskCooldown(team.id);
     invoked++;
   }
 }
