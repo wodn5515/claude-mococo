@@ -56,9 +56,9 @@ ${improvementReport || '(none)'}
 - New human messages → INVOKE
 - Team reports/delegation requests → INVOKE
 - Unresolved dispatches (5min+) → INVOKE
-- High severity improvement issues → INVOKE
+- High severity improvement issues → INVOKE (include issue details in reason)
 - Medium/low only improvement issues → NO (다음 정기 리뷰에서 처리)
-- Empty inbox + no unresolved + no issues → NO
+- Empty inbox + no unresolved + no high issues → NO
 
 Output ONE line:
 INVOKE: (reason summary in Korean, 1 line)
@@ -107,7 +107,13 @@ async function leaderHeartbeat(
           }
         }
         if (medium.length > 0) {
-          lines.push(`--- medium ${medium.length}건 (상세 생략) ---`);
+          lines.push('--- medium ---');
+          for (const i of medium) {
+            lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+          }
+        }
+        if (low.length > 0) {
+          lines.push(`--- low ${low.length}건 (정기 리뷰 대상) ---`);
         }
         improvementReport = lines.join('\n');
       }
