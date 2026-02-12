@@ -61,35 +61,25 @@ function summarizeInbox(raw: string, teamId: string): string {
   }).join('\n');
 }
 
-export async function buildTeamPrompt(
-  team: TeamConfig,
-  invocation: TeamInvocation,
-  config: TeamsConfig,
-  preloadedInbox?: string,
-): Promise<string> {
-  const ws = config.workspacePath;
-  const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
-  const conversationText = formatConversation(invocation.conversation);
+// ---------------------------------------------------------------------------
+// Data-loading helpers
+// ---------------------------------------------------------------------------
 
-  // Load shared rules (cached — rarely changes)
-  const sharedRules = readCached(path.resolve(ws, 'prompts/shared-rules.md'));
-
-  // Load shared member list (cached — changes infrequently)
-  const memberList = readCached(path.resolve(ws, '.mococo/members.md'));
-
-  // Dynamic Team Directory — auto-generated from teams.json
-  const teamDirectory = Object.values(config.teams)
-    .filter(t => t.id !== team.id)
+function buildTeamDirectory(config: TeamsConfig, currentTeamId: string): string {
+  return Object.values(config.teams)
+    .filter(t => t.id !== currentTeamId)
     .map(t => {
       const engineTag = t.engine !== 'claude' ? ` [${t.engine}]` : '';
       const mention = t.discordUserId ? ` → tag with <@${t.discordUserId}>` : '';
       return `- @${t.name}${engineTag}${mention}`;
     })
     .join('\n');
+}
 
-  // Load repo-specific rules if the conversation mentions a repo
+function loadRepoContext(ws: string, messageContent: string): { repoRules: string; repoList: string } {
+  // Repo-specific rules
   let repoRules = '';
-  const repoMatch = invocation.message.content.match(/repos\/(\S+)/);
+  const repoMatch = messageContent.match(/repos\/(\S+)/);
   if (repoMatch) {
     const repoRulesPath = path.resolve(ws, `prompts/repo-specific/${repoMatch[1]}.md`);
     if (fs.existsSync(repoRulesPath)) {
@@ -97,7 +87,7 @@ export async function buildTeamPrompt(
     }
   }
 
-  // List available repos
+  // Available repos
   let repos: string[] = [];
   try {
     repos = fs.readdirSync(path.resolve(ws, 'repos')).filter(f => f !== '.gitkeep');
@@ -108,65 +98,58 @@ export async function buildTeamPrompt(
     ? repos.map(r => `- repos/${r}`).join('\n')
     : '(no repos linked yet)';
 
-  // Load persistent memory (long-term + short-term)
-  const memoryDir = path.resolve(ws, '.mococo/memory', team.id);
+  return { repoRules, repoList };
+}
+
+function migrateAndLoadMemory(ws: string, teamId: string): { longTerm: string; shortTerm: string } {
+  const memoryDir = path.resolve(ws, '.mococo/memory', teamId);
   const longTermPath = path.resolve(memoryDir, 'long-term.md');
   const shortTermPath = path.resolve(memoryDir, 'short-term.md');
 
   // Migration: if old flat file exists and new dir doesn't, move it
-  const legacyPath = path.resolve(ws, '.mococo/memory', `${team.id}.md`);
+  const legacyPath = path.resolve(ws, '.mococo/memory', `${teamId}.md`);
   try {
     if (fs.existsSync(legacyPath) && !fs.existsSync(shortTermPath)) {
       fs.mkdirSync(memoryDir, { recursive: true });
       fs.renameSync(legacyPath, shortTermPath);
-      console.log(`[memory] Migrated ${team.id}.md → ${team.id}/short-term.md`);
+      console.log(`[memory] Migrated ${teamId}.md → ${teamId}/short-term.md`);
     }
   } catch (err) {
-    console.warn(`[memory] Legacy migration failed for ${team.id}: ${err}`);
+    console.warn(`[memory] Legacy migration failed for ${teamId}: ${err}`);
   }
 
-  let longTermMemory = '';
-  let shortTermMemory = '';
+  let longTerm = '';
+  let shortTerm = '';
+  try { longTerm = fs.readFileSync(longTermPath, 'utf-8').trim(); } catch { /* no long-term memory yet */ }
+  try { shortTerm = fs.readFileSync(shortTermPath, 'utf-8').trim(); } catch { /* no short-term memory yet */ }
+
+  return { longTerm, shortTerm };
+}
+
+function loadInbox(ws: string, team: TeamConfig, preloadedInbox?: string): string {
+  if (!team.isLeader) return '';
+
+  if (preloadedInbox !== undefined) {
+    return summarizeInbox(preloadedInbox, team.id);
+  }
+
+  const inboxPath = path.resolve(ws, '.mococo/inbox', `${team.id}.md`);
   try {
-    longTermMemory = fs.readFileSync(longTermPath, 'utf-8').trim();
+    return summarizeInbox(
+      fs.readFileSync(inboxPath, 'utf-8').trim(),
+      team.id,
+    );
   } catch {
-    // no long-term memory yet
+    return ''; // no inbox yet
   }
-  try {
-    shortTermMemory = fs.readFileSync(shortTermPath, 'utf-8').trim();
-  } catch {
-    // no short-term memory yet
-  }
+}
 
-  // Load inbox (leader only — non-leaders get context via reactive dispatch)
-  let inbox = '';
-  if (team.isLeader) {
-    if (preloadedInbox !== undefined) {
-      inbox = summarizeInbox(preloadedInbox, team.id);
-    } else {
-      const inboxPath = path.resolve(ws, '.mococo/inbox', `${team.id}.md`);
-      try {
-        inbox = summarizeInbox(
-          fs.readFileSync(inboxPath, 'utf-8').trim(),
-          team.id,
-        );
-      } catch {
-        // no inbox yet — that's fine
-      }
-    }
-  }
+// ---------------------------------------------------------------------------
+// Prompt section builders
+// ---------------------------------------------------------------------------
 
-  const recentEpisodes = loadRecentEpisodes(team.id, ws);
-  const currentTime = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  const chId = invocation.channelId;
-
-  return `${template}
-${sharedRules ? `\n${sharedRules}\n` : ''}
-## Current Context
-현재 채널: ${chId}
-현재 시각: ${currentTime}
-
-## Long-term Memory
+function buildMemorySection(longTerm: string, shortTerm: string, chId: string): string {
+  return `## Long-term Memory
 Important knowledge that persists permanently. Only update when you have something worth keeping forever.
 Use these sections to organize:
 
@@ -190,7 +173,7 @@ Use these sections to organize:
 - BE코코: API 설계, DB 마이그레이션, 성능 최적화
 - FE코코: React, 배포 파이프라인, UI/UX
 
-${longTermMemory ? `\n${longTermMemory}\n` : '\n(empty)\n'}
+${longTerm ? `\n${longTerm}\n` : '\n(empty)\n'}
 ## Short-term Memory
 Working context for current tasks. Update every response.
 Use these sections to organize:
@@ -215,40 +198,34 @@ Use these sections to organize:
 - [2/12 09:00] GitHub PR: #142 리뷰 대기, #140 머지 완료
 
 ⚠️ #ch: 뒤에는 반드시 실제 Discord 채널 ID(숫자)를 적어라. 현재 채널 ID: ${chId}
-${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
-## Recent Activity (자동 생성 — 수정 불필요)
-최근 활동 요약. 이전 호출에서 무엇을 했는지 파악하여 맥락을 이어가라.
-${recentEpisodes || '(no recent activity)'}
+${shortTerm ? `\n${shortTerm}\n` : '\n(empty)\n'}`;
+}
 
-${team.isLeader ? `## Inbox (messages since your last response)
-${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
-**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.` : `**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory, incorporate new information, and remove anything outdated.`}
-**⚠️ CRITICAL: 외부 도구 호출 전 반드시 메모리를 먼저 확인하라.**
-- Short-term/Long-term Memory에 이미 있는 데이터는 절대 다시 API 호출하지 마라.
-- 예: 일주일치 일정을 이미 조회해서 메모리에 있으면, 오늘 일정을 물어봤을 때 메모리에서 추출하라. 같은 데이터를 또 API로 가져오지 마라.
-- 외부 도구(API, MCP 서버)는 메모리에 관련 데이터가 전혀 없거나, 데이터가 오래되었거나(24시간+), 사용자가 명시적으로 "새로 조회해줘"라고 요청한 경우에만 호출하라.
+function buildDiscordCommandsSection(team: TeamConfig): string {
+  const leaderDecisionLog = `
+**Decision Log (자율 결정 기록 — 리더 전용):**
+자율적으로 결정을 내릴 때 반드시 다음 태그를 출력에 포함:
+\`[decision:level reason="설명" action="조치 내용"]\`
 
-## Server Members
-${memberList || '(no member data)'}
+Levels:
+- \`autonomous\` — 루틴 작업 (버그 수정, 리팩토링, 작업 재분배). 실행 후 기록만.
+- \`inform\` — 기존 범위 내 개선. 실행 후 보고.
+- \`propose\` — 새 기능, 아키텍처 변경, 새 도구 도입. 회장님 승인 대기.
+- \`escalate\` — 보안, 장애, 긴급. 즉시 회장님 태그.
 
-## Team Directory
-These are the teams you can tag. Mention @TeamName to hand off work:
-${teamDirectory}
+예: \`[decision:autonomous reason="중복 코드 발견" action="BE코코에게 리팩토링 지시"]\`
+예: \`[decision:propose reason="새 인증 시스템 필요" action="회장님 승인 대기"]\`
+`;
 
-## Discord Conversation (recent)
-\`\`\`
-${conversationText}
-\`\`\`
+  const memberImprovementNote = `
+**개선사항 발견 시 (비리더 팀 전용):**
+작업 중 버그, 보안 취약점, 성능 이슈, 리팩토링 필요 코드를 발견하면 대장코코에게 보고하라.
+output 마지막에 대장코코를 태그하고 발견 내용을 간단히 기술:
+예: \`<@대장코코ID> [발견] medium: utils.ts에 중복 코드, 리팩토링 필요\`
+이렇게 하면 시스템이 자동으로 대장코코를 invoke하여 판단한다.
+`;
 
-## Discord Mentions
-**보내기: 말을 전달하려는 대상은 반드시 전부 태그한다. 예외 없음.**
-- 대상이 1명이면 \`<@ID>\`로 시작
-- 대상이 여러 명이면 전부 나열: \`<@ID1> <@ID2> <@ID3>\`로 시작
-- 답변, 보고, 위임, 질문 — 모든 경우에 태그
-
-${config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : ''}${invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>` : ''}
-
-## Discord Commands
+  return `## Discord Commands
 You can manage Discord resources by embedding commands in your output. Commands are stripped before posting.
 Syntax: \`[discord:action key=value key="quoted value"]\`
 
@@ -326,28 +303,108 @@ When asked to update your persona/personality/character, output the command tag 
 ---END-PERSONA---
 \`\`\`
 This rewrites your persona file. Include your ENTIRE persona — anything omitted will be lost.
-${team.isLeader ? `
-**Decision Log (자율 결정 기록 — 리더 전용):**
-자율적으로 결정을 내릴 때 반드시 다음 태그를 출력에 포함:
-\`[decision:level reason="설명" action="조치 내용"]\`
+${team.isLeader ? leaderDecisionLog : memberImprovementNote}`;
+}
 
-Levels:
-- \`autonomous\` — 루틴 작업 (버그 수정, 리팩토링, 작업 재분배). 실행 후 기록만.
-- \`inform\` — 기존 범위 내 개선. 실행 후 보고.
-- \`propose\` — 새 기능, 아키텍처 변경, 새 도구 도입. 회장님 승인 대기.
-- \`escalate\` — 보안, 장애, 긴급. 즉시 회장님 태그.
+// ---------------------------------------------------------------------------
+// Main prompt builder (orchestrator)
+// ---------------------------------------------------------------------------
 
-예: \`[decision:autonomous reason="중복 코드 발견" action="BE코코에게 리팩토링 지시"]\`
-예: \`[decision:propose reason="새 인증 시스템 필요" action="회장님 승인 대기"]\`
-` : `
-**개선사항 발견 시 (비리더 팀 전용):**
-작업 중 버그, 보안 취약점, 성능 이슈, 리팩토링 필요 코드를 발견하면 대장코코에게 보고하라.
-output 마지막에 대장코코를 태그하고 발견 내용을 간단히 기술:
-예: \`<@대장코코ID> [발견] medium: utils.ts에 중복 코드, 리팩토링 필요\`
-이렇게 하면 시스템이 자동으로 대장코코를 invoke하여 판단한다.
-`}
+export async function buildTeamPrompt(
+  team: TeamConfig,
+  invocation: TeamInvocation,
+  config: TeamsConfig,
+  preloadedInbox?: string,
+): Promise<string> {
+  const ws = config.workspacePath;
+  const chId = invocation.channelId;
+
+  // 1. Load base resources
+  const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
+  const conversationText = formatConversation(invocation.conversation);
+  const sharedRules = readCached(path.resolve(ws, 'prompts/shared-rules.md'));
+  const memberList = readCached(path.resolve(ws, '.mococo/members.md'));
+
+  // 2. Build dynamic context
+  const teamDirectory = buildTeamDirectory(config, team.id);
+  const { repoRules, repoList } = loadRepoContext(ws, invocation.message.content);
+  const { longTerm, shortTerm } = migrateAndLoadMemory(ws, team.id);
+  const inbox = loadInbox(ws, team, preloadedInbox);
+
+  // 3. Load temporal context
+  const recentEpisodes = loadRecentEpisodes(team.id, ws);
+  const currentTime = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+  // 4. Build prompt sections
+  const memorySection = buildMemorySection(longTerm, shortTerm, chId);
+  const discordCommands = buildDiscordCommandsSection(team);
+
+  // 5. Build inbox/memory instruction (leader vs member)
+  const inboxInstruction = team.isLeader
+    ? `## Inbox (messages since your last response)
+${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
+**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.`
+    : `**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory, incorporate new information, and remove anything outdated.`;
+
+  // 6. Build mention info
+  const humanMention = config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : '';
+  const triggerMention = invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId
+    ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>`
+    : '';
+
+  // 7. Build trigger info
+  const triggerFrom = invocation.message.teamId === 'human'
+    ? `Human (<@${invocation.message.discordId ?? ''}>)`
+    : invocation.message.teamName;
+
+  // 8. Agent teams section
+  const agentTeamsSection = team.useTeams
+    ? `\n## Agent Teams
+You have agent team capabilities enabled. For complex tasks that involve multiple files, parallel work, or multi-step operations, you SHOULD use the team/swarm tools to spawn sub-agents and coordinate work in parallel. This improves speed and quality. For simple single-file tasks, work directly without spawning a team.
+${team.teamRules?.length ? `\n### Team Rules\n${team.teamRules.map(r => `- ${r}`).join('\n')}` : ''}`
+    : '';
+
+  // 9. Assemble final prompt
+  return `${template}
+${sharedRules ? `\n${sharedRules}\n` : ''}
+## Current Context
+현재 채널: ${chId}
+현재 시각: ${currentTime}
+
+${memorySection}
+## Recent Activity (자동 생성 — 수정 불필요)
+최근 활동 요약. 이전 호출에서 무엇을 했는지 파악하여 맥락을 이어가라.
+${recentEpisodes || '(no recent activity)'}
+
+${inboxInstruction}
+**⚠️ CRITICAL: 외부 도구 호출 전 반드시 메모리를 먼저 확인하라.**
+- Short-term/Long-term Memory에 이미 있는 데이터는 절대 다시 API 호출하지 마라.
+- 예: 일주일치 일정을 이미 조회해서 메모리에 있으면, 오늘 일정을 물어봤을 때 메모리에서 추출하라. 같은 데이터를 또 API로 가져오지 마라.
+- 외부 도구(API, MCP 서버)는 메모리에 관련 데이터가 전혀 없거나, 데이터가 오래되었거나(24시간+), 사용자가 명시적으로 "새로 조회해줘"라고 요청한 경우에만 호출하라.
+
+## Server Members
+${memberList || '(no member data)'}
+
+## Team Directory
+These are the teams you can tag. Mention @TeamName to hand off work:
+${teamDirectory}
+
+## Discord Conversation (recent)
+\`\`\`
+${conversationText}
+\`\`\`
+
+## Discord Mentions
+**보내기: 말을 전달하려는 대상은 반드시 전부 태그한다. 예외 없음.**
+- 대상이 1명이면 \`<@ID>\`로 시작
+- 대상이 여러 명이면 전부 나열: \`<@ID1> <@ID2> <@ID3>\`로 시작
+- 답변, 보고, 위임, 질문 — 모든 경우에 태그
+
+${humanMention}${triggerMention}
+
+${discordCommands}
 ## The Message That Triggered You
-From: ${invocation.message.teamId === 'human' ? `Human (<@${invocation.message.discordId ?? ''}>)` : invocation.message.teamName}
+From: ${triggerFrom}
 Content: ${invocation.message.content}
 
 ## Available Repositories
@@ -356,9 +413,6 @@ ${repoRules}
 
 ## Your Identity
 You are: ${team.name} (engine: ${team.engine}, model: ${team.model})
-${team.useTeams ? `
-## Agent Teams
-You have agent team capabilities enabled. For complex tasks that involve multiple files, parallel work, or multi-step operations, you SHOULD use the team/swarm tools to spawn sub-agents and coordinate work in parallel. This improves speed and quality. For simple single-file tasks, work directly without spawning a team.
-${team.teamRules?.length ? `\n### Team Rules\n${team.teamRules.map(r => `- ${r}`).join('\n')}` : ''}` : ''}
+${agentTeamsSection}
 `;
 }
