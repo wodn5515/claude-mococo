@@ -460,7 +460,11 @@ async function handlePinMessage(params: Record<string, string>, ctx: CommandCont
   const channel = ctx.guild.channels.cache.get(ctx.channelId) as TextChannel | undefined;
   if (!channel) return;
 
-  const msg = await channel.messages.fetch(msgId);
+  const msg = await channel.messages.fetch(msgId).catch(() => null);
+  if (!msg) {
+    console.warn(`[discord-cmd] Message ${msgId} not found or inaccessible`);
+    return;
+  }
   await msg.pin();
   console.log(`[discord-cmd] Pinned message ${msgId}`);
 }
@@ -474,7 +478,11 @@ async function handleReact(params: Record<string, string>, ctx: CommandContext) 
   const channel = ctx.guild.channels.cache.get(ctx.channelId) as TextChannel | undefined;
   if (!channel) return;
 
-  const msg = await channel.messages.fetch(msgId);
+  const msg = await channel.messages.fetch(msgId).catch(() => null);
+  if (!msg) {
+    console.warn(`[discord-cmd] Message ${msgId} not found or inaccessible`);
+    return;
+  }
   await msg.react(emoji);
   console.log(`[discord-cmd] Reacted ${emoji} to message ${msgId}`);
 }
@@ -491,7 +499,11 @@ async function handleEditMessage(params: Record<string, string>, ctx: CommandCon
   const channel = client.channels.cache.get(ctx.channelId) as TextChannel | undefined;
   if (!channel) return;
 
-  const msg = await channel.messages.fetch(msgId);
+  const msg = await channel.messages.fetch(msgId).catch(() => null);
+  if (!msg) {
+    console.warn(`[discord-cmd] Message ${msgId} not found or inaccessible`);
+    return;
+  }
   if (msg.author.id !== client.user?.id) {
     console.warn(`[discord-cmd] Cannot edit message ${msgId} — not authored by this bot`);
     return;
@@ -510,7 +522,11 @@ async function handleDeleteMessage(params: Record<string, string>, ctx: CommandC
   const channel = client.channels.cache.get(ctx.channelId) as TextChannel | undefined;
   if (!channel) return;
 
-  const msg = await channel.messages.fetch(msgId);
+  const msg = await channel.messages.fetch(msgId).catch(() => null);
+  if (!msg) {
+    console.warn(`[discord-cmd] Message ${msgId} not found or inaccessible`);
+    return;
+  }
   if (msg.author.id !== client.user?.id) {
     console.warn(`[discord-cmd] Cannot delete message ${msgId} — not authored by this bot`);
     return;

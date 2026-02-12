@@ -57,8 +57,8 @@ Output ONLY the summary text, nothing else.`;
       const trimmed = lines.slice(-MAX_EPISODE_LINES).join('\n') + '\n';
       fs.writeFileSync(filePath, trimmed);
     }
-  } catch {
-    // truncation failed — non-critical
+  } catch (err) {
+    console.warn(`[episode] Truncation failed for ${teamId}: ${err}`);
   }
 }
 

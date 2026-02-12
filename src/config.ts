@@ -16,13 +16,28 @@ const AVATAR_MAP: Record<string, string> = {
 
 export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsConfig {
   const teamsJsonPath = path.resolve(workspacePath, 'teams.json');
-  const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
+
+  let raw: any;
+  try {
+    raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.error(`[config] teams.json not found at ${teamsJsonPath}`);
+      console.error('[config] Run "mococo init" first to create a workspace.');
+      process.exit(1);
+    }
+    throw err;
+  }
+
   const teams: Record<string, TeamConfig> = {};
 
   for (const [id, cfg] of Object.entries(raw.teams as Record<string, any>)) {
     // Resolve Discord token: read env var name from config
     const discordTokenEnv = cfg.discordTokenEnv ?? `${id.toUpperCase()}_DISCORD_TOKEN`;
     const discordToken = process.env[discordTokenEnv] ?? '';
+    if (!discordToken) {
+      console.warn(`[config] Missing env var ${discordTokenEnv} for team "${id}" — bot will not start`);
+    }
 
     // Resolve MCP server configs: expand $VAR references in env values
     let mcpServers: Record<string, McpServerConfig> | undefined;

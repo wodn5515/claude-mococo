@@ -7,6 +7,24 @@ import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 const MAX_INBOX_ENTRIES = 20;
 const MAX_ENTRY_CHARS = 200;
 
+// File cache for rarely-changing files (shared rules, member list)
+const fileCache = new Map<string, { content: string; mtime: number }>();
+const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+
+function readCached(filePath: string): string {
+  const now = Date.now();
+  const cached = fileCache.get(filePath);
+  if (cached && now - cached.mtime < CACHE_TTL_MS) return cached.content;
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8').trim();
+    fileCache.set(filePath, { content, mtime: now });
+    return content;
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Summarize inbox: truncate long messages, keep recent entries,
  * prioritize messages that mention this team.
@@ -53,23 +71,11 @@ export async function buildTeamPrompt(
   const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
   const conversationText = formatConversation(invocation.conversation);
 
-  // Load shared rules (injected for every team)
-  let sharedRules = '';
-  const sharedRulesPath = path.resolve(ws, 'prompts/shared-rules.md');
-  try {
-    sharedRules = fs.readFileSync(sharedRulesPath, 'utf-8').trim();
-  } catch {
-    // no shared rules file — that's fine
-  }
+  // Load shared rules (cached — rarely changes)
+  const sharedRules = readCached(path.resolve(ws, 'prompts/shared-rules.md'));
 
-  // Load shared member list
-  let memberList = '';
-  const membersPath = path.resolve(ws, '.mococo/members.md');
-  try {
-    memberList = fs.readFileSync(membersPath, 'utf-8').trim();
-  } catch {
-    // no member list yet
-  }
+  // Load shared member list (cached — changes infrequently)
+  const memberList = readCached(path.resolve(ws, '.mococo/members.md'));
 
   // Dynamic Team Directory — auto-generated from teams.json
   const teamDirectory = Object.values(config.teams)

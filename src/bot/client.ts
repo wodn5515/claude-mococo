@@ -101,21 +101,19 @@ export function newChain(): ChainContext {
  *   [A,B,C,A,B]         → period 3, < 2 reps → false (not enough data)
  *   [A,B,C,D,E,F]       → no repeating cycle → false
  */
+const MIN_TRAIL_LENGTH_FOR_DETECTION = 6;
+const MIN_CYCLE_PERIOD = 2;
+const MIN_REPEATS_FOR_PERIOD_2 = 3; // Stricter for A↔B to avoid false positives
+const MIN_REPEATS_FOR_LONGER_PERIODS = 2;
+
 function detectLoop(chain: ChainContext, nextTeamId: string): boolean {
   const trail = [...chain.recentPath, nextTeamId];
 
-  // Minimum detectable cycle requires 6 elements:
-  //   - period 2 × 3 reps = 6  (e.g. [A,B,A,B,A,B])
-  //   - period 3 × 2 reps = 6  (e.g. [A,B,C,A,B,C])
-  // Lengths below 6 can never satisfy any cycle check, so bail out early.
-  if (trail.length < 6) return false;
+  if (trail.length < MIN_TRAIL_LENGTH_FOR_DETECTION) return false;
 
-  // Try cycle periods from 2 up to half the trail length
   const maxPeriod = Math.floor(trail.length / 2);
-  for (let period = 2; period <= maxPeriod; period++) {
-    // Period 2: strict — require 3 reps (6 elements) to avoid false positives
-    // Period 3+: 2 reps is sufficient evidence of a cycle
-    const minRepeats = period === 2 ? 3 : 2;
+  for (let period = MIN_CYCLE_PERIOD; period <= maxPeriod; period++) {
+    const minRepeats = period === 2 ? MIN_REPEATS_FOR_PERIOD_2 : MIN_REPEATS_FOR_LONGER_PERIODS;
     const needed = period * minRepeats;
     if (trail.length < needed) continue;
 
@@ -228,8 +226,15 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 
   // Dedup: prevent the same Discord message from being added to conversation
   // history twice (leader + non-leader both receive the same messageCreate event)
-  const processedMsgIds = new Set<string>();
-  setInterval(() => processedMsgIds.clear(), 10 * 60_000);
+  const processedMsgIds = new Map<string, number>(); // msgId → timestamp
+  const MAX_TRACKED_MSGS = 1000;
+  setInterval(() => {
+    // Evict entries older than 10 minutes instead of clearing all
+    const cutoff = Date.now() - 10 * 60_000;
+    for (const [id, ts] of processedMsgIds) {
+      if (ts < cutoff) processedMsgIds.delete(id);
+    }
+  }, 5 * 60_000);
 
   // Forward hook events as team progress in Discord
   hookEvents.on('any', async (event) => {
@@ -407,7 +412,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           mentions: findMentionedTeams(content, config).map(t => t.id),
         };
         if (!processedMsgIds.has(msg.id)) {
-          processedMsgIds.add(msg.id);
+          processedMsgIds.set(msg.id, Date.now());
+          if (processedMsgIds.size > MAX_TRACKED_MSGS) {
+            const oldestKey = processedMsgIds.keys().next().value;
+            if (oldestKey) processedMsgIds.delete(oldestKey);
+          }
           addMessage(msg.channelId, humanMsg);
         }
 
@@ -437,7 +446,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           mentions: [team.id],
         };
         if (!processedMsgIds.has(msg.id)) {
-          processedMsgIds.add(msg.id);
+          processedMsgIds.set(msg.id, Date.now());
+          if (processedMsgIds.size > MAX_TRACKED_MSGS) {
+            const oldestKey = processedMsgIds.keys().next().value;
+            if (oldestKey) processedMsgIds.delete(oldestKey);
+          }
           addMessage(msg.channelId, humanMsg);
         }
         handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());

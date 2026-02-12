@@ -226,18 +226,22 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
       // Read each file (up to MAX_LINES_PER_FILE lines to avoid token overflow)
       const MAX_LINES_PER_FILE = 300;
       const fileContents: { filePath: string; content: string }[] = [];
-      for (const entry of targetFiles) {
+      const readPromises = targetFiles.map(async (entry) => {
         try {
           const fullPath = path.join(repoPath, entry.filePath);
-          const raw = fs.readFileSync(fullPath, 'utf-8');
+          const raw = await fs.promises.readFile(fullPath, 'utf-8');
           const lines = raw.split('\n');
           const truncated = lines.length > MAX_LINES_PER_FILE;
           const content = lines.slice(0, MAX_LINES_PER_FILE).join('\n')
             + (truncated ? `\n// ... (truncated: ${lines.length - MAX_LINES_PER_FILE} more lines)` : '');
-          fileContents.push({ filePath: entry.filePath, content });
+          return { filePath: entry.filePath, content };
         } catch {
-          // File unreadable, skip
+          return null;
         }
+      });
+      const results = await Promise.all(readPromises);
+      for (const r of results) {
+        if (r) fileContents.push(r);
       }
 
       if (fileContents.length === 0) continue;
@@ -247,6 +251,9 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
 
       // Parse JSON output from Haiku
       const parsed = parseHaikuOutput(output);
+      if (parsed.length === 0 && output.trim().length > 0) {
+        console.warn(`[improvement-scanner] Haiku output for ${repoName} could not be parsed (${output.length} chars)`);
+      }
       allIssues.push(...parsed);
 
     } catch (err) {
