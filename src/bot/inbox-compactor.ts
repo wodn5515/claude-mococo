@@ -57,6 +57,7 @@ ${improvementReport || '(none)'}
 - Team reports/delegation requests → INVOKE
 - Unresolved dispatches (5min+) → INVOKE
 - High severity improvement issues → INVOKE
+- Medium/low only improvement issues → NO (다음 정기 리뷰에서 처리)
 - Empty inbox + no unresolved + no issues → NO
 
 Output ONE line:
@@ -91,9 +92,24 @@ async function leaderHeartbeat(
     try {
       const raw = fs.readFileSync(path.resolve(ws, '.mococo/inbox/improvement.json'), 'utf-8');
       const data = JSON.parse(raw);
-      const highIssues = (data.issues ?? []).filter((i: { severity: string }) => i.severity === 'high');
-      if (highIssues.length > 0) {
-        improvementReport = `${highIssues.length} high-severity issue(s) found`;
+      const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
+      const high = issues.filter(i => i.severity === 'high');
+      const medium = issues.filter(i => i.severity === 'medium');
+      const low = issues.filter(i => i.severity === 'low');
+
+      if (issues.length > 0) {
+        const lines: string[] = [];
+        lines.push(`총 ${issues.length}건 (high: ${high.length}, medium: ${medium.length}, low: ${low.length})`);
+        if (high.length > 0) {
+          lines.push('--- high ---');
+          for (const i of high) {
+            lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+          }
+        }
+        if (medium.length > 0) {
+          lines.push(`--- medium ${medium.length}건 (상세 생략) ---`);
+        }
+        improvementReport = lines.join('\n');
       }
     } catch {}
 
