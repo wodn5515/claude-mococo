@@ -28,6 +28,11 @@ export function waitForFree(teamId: TeamId): Promise<void> {
   });
 }
 
+export function isQueued(teamId: TeamId): boolean {
+  const queue = queues.get(teamId);
+  return !!queue && queue.length > 0;
+}
+
 export function getStatus(): Record<string, { busy: boolean; since?: Date; task?: string }> {
   const status: Record<string, { busy: boolean; since?: Date; task?: string }> = {};
   for (const [id, info] of busyTeams) {

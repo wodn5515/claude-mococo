@@ -43,13 +43,7 @@ export function stripMemoryBlocks(
       }
     }
 
-    const personaRe = new RegExp(PERSONA_RE.source, 'g');
-    while ((match = personaRe.exec(output)) !== null) {
-      const content = match[1];
-      if (content) {
-        // Persona update needs the prompt path — skip here, handled by processDiscordCommands
-      }
-    }
+    // Persona updates are handled by processDiscordCommands, not here
   }
 
   return output
@@ -118,6 +112,16 @@ function parseCommands(output: string): ParsedCommand[] {
     const action = match[1];
     const params = parseParams(match[2]);
     commands.push({ raw, action, params });
+  }
+
+  // Decision log tags: [decision:level reason="..." action="..."]
+  const decisionRe = /\[decision:(\S+)((?:\s+\S+=(?:"[^"]*"|\S+))*)\s*\]/g;
+  while ((match = decisionRe.exec(masked)) !== null) {
+    const raw = output.slice(match.index, match.index + match[0].length);
+    const level = match[1];
+    const params = parseParams(match[2]);
+    params._level = level;
+    commands.push({ raw, action: 'decision-log', params });
   }
 
   // Block syntax: run against original text (not masked) since bots wrap these in code fences
@@ -234,6 +238,8 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
       case 'edit-persona':    return await handleEditPersona(cmd.params, ctx);
       case 'edit-memory':     return await handleEditMemory(cmd.params, ctx);
       case 'edit-long-memory': return await handleEditLongMemory(cmd.params, ctx);
+      // Decision log
+      case 'decision-log':    return handleDecisionLog(cmd.params, ctx);
       // Query
       case 'list-roles':      return await handleListRoles(ctx);
       case 'list-channels':   return await handleListChannels(ctx);
@@ -752,6 +758,37 @@ async function handleListChannels(ctx: CommandContext): Promise<void> {
   await ctx.sendAsTeam(ctx.channelId, ctx.team, `**서버 채널 목록:**\n${output}`);
   const totalChannels = guild.channels.cache.filter(c => isNonCategory(c)).size;
   console.log(`[discord-cmd] Listed ${totalChannels} channels`);
+}
+
+// --- Decision Log Handler ---
+
+function handleDecisionLog(params: Record<string, string>, ctx: CommandContext): void {
+  const level = params._level ?? 'autonomous';
+  const reason = params.reason ?? '';
+  const action = params.action ?? '';
+  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+  console.log(`[decision] [${level}] ${ctx.team.name}: ${reason} → ${action}`);
+
+  // Append to decision log file
+  const logDir = path.resolve(ctx.config.workspacePath, '.mococo');
+  fs.mkdirSync(logDir, { recursive: true });
+  const logPath = path.resolve(logDir, 'decision-log.jsonl');
+  const entry = JSON.stringify({
+    timestamp: ts,
+    team: ctx.team.name,
+    level,
+    reason,
+    action,
+  });
+  fs.appendFileSync(logPath, entry + '\n');
+
+  // For propose/escalate: also post to decision log channel if configured
+  if ((level === 'propose' || level === 'escalate') && ctx.env.decisionLogChannelId) {
+    const emoji = level === 'escalate' ? '🚨' : '📋';
+    const msg = `${emoji} **[${level.toUpperCase()}]** ${ctx.team.name}\n> ${reason}\n> 조치: ${action}`;
+    ctx.sendAsTeam(ctx.env.decisionLogChannelId, ctx.team, msg).catch(() => {});
+  }
 }
 
 // --- Persona Handler ---

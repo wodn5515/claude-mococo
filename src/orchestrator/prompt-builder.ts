@@ -27,13 +27,11 @@ function summarizeInbox(raw: string, teamId: string): string {
     };
   });
 
-  // Sort: mentions-me first, then by recency (original order = chronological)
-  const mentioning = entries.filter(e => e.mentionsMe);
+  // Prioritize mentions, fill remaining with most recent others
+  const mentioning = entries.filter(e => e.mentionsMe).slice(-MAX_INBOX_ENTRIES);
   const others = entries.filter(e => !e.mentionsMe);
-  const sorted = [...mentioning, ...others];
-
-  // Keep only the most recent entries
-  const kept = sorted.slice(-MAX_INBOX_ENTRIES);
+  const remaining = MAX_INBOX_ENTRIES - mentioning.length;
+  const kept = [...mentioning, ...(remaining > 0 ? others.slice(-remaining) : [])];
 
   // Format with truncation
   return kept.map(e => {
@@ -48,6 +46,7 @@ export async function buildTeamPrompt(
   team: TeamConfig,
   invocation: TeamInvocation,
   config: TeamsConfig,
+  preloadedInbox?: string,
 ): Promise<string> {
   const ws = config.workspacePath;
   const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
@@ -132,16 +131,22 @@ export async function buildTeamPrompt(
     // no short-term memory yet
   }
 
-  // Load inbox (messages received since last invocation) and summarize
-  const inboxPath = path.resolve(ws, '.mococo/inbox', `${team.id}.md`);
+  // Load inbox (leader only — non-leaders get context via reactive dispatch)
   let inbox = '';
-  try {
-    inbox = summarizeInbox(
-      fs.readFileSync(inboxPath, 'utf-8').trim(),
-      team.id,
-    );
-  } catch {
-    // no inbox yet — that's fine
+  if (team.isLeader) {
+    if (preloadedInbox !== undefined) {
+      inbox = summarizeInbox(preloadedInbox, team.id);
+    } else {
+      const inboxPath = path.resolve(ws, '.mococo/inbox', `${team.id}.md`);
+      try {
+        inbox = summarizeInbox(
+          fs.readFileSync(inboxPath, 'utf-8').trim(),
+          team.id,
+        );
+      } catch {
+        // no inbox yet — that's fine
+      }
+    }
   }
 
   return `${template}
@@ -179,9 +184,9 @@ Use these sections to organize:
 \`\`\`
 **⚠️ 진행중 작업 및 대기 항목에는 반드시 #ch:channelId를 포함하라.** 이 정보가 있어야 자동 실행 루프가 어느 채널에서 작업을 이어할지 알 수 있다.
 ${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
-## Inbox (messages since your last response)
+${team.isLeader ? `## Inbox (messages since your last response)
 ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
-**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.
+**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.` : `**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory, incorporate new information, and remove anything outdated.`}
 **⚠️ CRITICAL: 외부 도구 호출 전 반드시 메모리를 먼저 확인하라.**
 - Short-term/Long-term Memory에 이미 있는 데이터는 절대 다시 API 호출하지 마라.
 - 예: 일주일치 일정을 이미 조회해서 메모리에 있으면, 오늘 일정을 물어봤을 때 메모리에서 추출하라. 같은 데이터를 또 API로 가져오지 마라.
@@ -285,7 +290,26 @@ When asked to update your persona/personality/character, output the command tag 
 ---END-PERSONA---
 \`\`\`
 This rewrites your persona file. Include your ENTIRE persona — anything omitted will be lost.
+${team.isLeader ? `
+**Decision Log (자율 결정 기록 — 리더 전용):**
+자율적으로 결정을 내릴 때 반드시 다음 태그를 출력에 포함:
+\`[decision:level reason="설명" action="조치 내용"]\`
 
+Levels:
+- \`autonomous\` — 루틴 작업 (버그 수정, 리팩토링, 작업 재분배). 실행 후 기록만.
+- \`inform\` — 기존 범위 내 개선. 실행 후 보고.
+- \`propose\` — 새 기능, 아키텍처 변경, 새 도구 도입. 회장님 승인 대기.
+- \`escalate\` — 보안, 장애, 긴급. 즉시 회장님 태그.
+
+예: \`[decision:autonomous reason="중복 코드 발견" action="BE코코에게 리팩토링 지시"]\`
+예: \`[decision:propose reason="새 인증 시스템 필요" action="회장님 승인 대기"]\`
+` : `
+**개선사항 발견 시 (비리더 팀 전용):**
+작업 중 버그, 보안 취약점, 성능 이슈, 리팩토링 필요 코드를 발견하면 대장코코에게 보고하라.
+output 마지막에 대장코코를 태그하고 발견 내용을 간단히 기술:
+예: \`<@대장코코ID> [발견] medium: utils.ts에 중복 코드, 리팩토링 필요\`
+이렇게 하면 시스템이 자동으로 대장코코를 invoke하여 판단한다.
+`}
 ## The Message That Triggered You
 From: ${invocation.message.teamId === 'human' ? `Human (<@${invocation.message.discordId ?? ''}>)` : invocation.message.teamName}
 Content: ${invocation.message.content}

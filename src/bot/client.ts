@@ -1,16 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { Client, GatewayIntentBits, type GuildMember, type TextChannel, type Message } from 'discord.js';
 import { routeMessage, findMentionedTeams } from './router.js';
 import { invokeTeam } from '../teams/invoker.js';
 import { addMessage, getRecentConversation } from '../teams/context.js';
-import { isBusy, markBusy, markFree, waitForFree, getStatus } from '../teams/concurrency.js';
+import { isBusy, isQueued, markBusy, markFree, waitForFree, getStatus } from '../teams/concurrency.js';
+import { ledger } from '../teams/dispatch-ledger.js';
 import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import { startInboxCompactor } from './inbox-compactor.js';
 import { startMemoryConsolidator } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
-import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage } from '../types.js';
+import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const DEFAULT_CHAIN_BUDGET = 20;
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
 export const teamClients = new Map<string, Client>();
@@ -19,25 +27,79 @@ export const teamClients = new Map<string, Client>();
 // Inbox helpers — append chat to a team's inbox file for memory processing
 // ---------------------------------------------------------------------------
 
-function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
-  const dir = path.resolve(workspacePath, '.mococo/inbox');
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.resolve(dir, `${teamId}.md`);
-  const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  fs.appendFileSync(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
+const inboxWriteQueue: Array<() => Promise<void>> = [];
+let isProcessingInboxQueue = false;
+
+async function processInboxWriteQueue() {
+  if (isProcessingInboxQueue || inboxWriteQueue.length === 0) return;
+  isProcessingInboxQueue = true;
+
+  while (inboxWriteQueue.length > 0) {
+    const task = inboxWriteQueue.shift()!;
+    try {
+      await task();
+    } catch (err) {
+      console.error('[inbox-queue] Write failed:', err);
+    }
+  }
+
+  isProcessingInboxQueue = false;
 }
 
-function clearInbox(teamId: string, workspacePath: string) {
+export function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
+  return new Promise<void>((resolve, reject) => {
+    inboxWriteQueue.push(async () => {
+      try {
+        const dir = path.resolve(workspacePath, '.mococo/inbox');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.resolve(dir, `${teamId}.md`);
+        const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
+    processInboxWriteQueue();
+  });
+}
+
+export function clearInbox(teamId: string, workspacePath: string) {
   const file = path.resolve(workspacePath, '.mococo/inbox', `${teamId}.md`);
   try { fs.unlinkSync(file); } catch {}
 }
 
 // ---------------------------------------------------------------------------
-// Member tracking — update leader's long-term memory on join/leave
+// Chain helpers — prevent infinite bot-to-bot loops
 // ---------------------------------------------------------------------------
 
+export function newChain(): ChainContext {
+  return {
+    chainId: crypto.randomUUID(),
+    totalInvocations: 0,
+    maxBudget: DEFAULT_CHAIN_BUDGET,
+    recentPath: [],
+  };
+}
+
+/**
+ * Detect loop: same team pair repeating 3+ times consecutively.
+ * e.g. [A,B,A,B,A,B] = A↔B loop
+ */
+function detectLoop(chain: ChainContext, nextTeamId: string): boolean {
+  const path = [...chain.recentPath, nextTeamId];
+  if (path.length < 6) return false;
+
+  const last6 = path.slice(-6);
+  const pair = `${last6[0]}|${last6[1]}`;
+  for (let i = 2; i < last6.length - 1; i += 2) {
+    if (`${last6[i]}|${last6[i + 1]}` !== pair) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
-// Member tracking — shared member list for all mococos
+// Member tracking
 // ---------------------------------------------------------------------------
 
 function writeMemberList(members: Map<string, string>, workspacePath: string) {
@@ -50,7 +112,6 @@ function writeMemberList(members: Map<string, string>, workspacePath: string) {
   fs.writeFileSync(membersPath, lines + '\n');
 }
 
-/** Full sync: fetch all guild members and rebuild members.md */
 async function syncMemberList(client: Client, workspacePath: string) {
   const guild = client.guilds.cache.first();
   if (!guild) return;
@@ -69,7 +130,6 @@ function updateMemberTracking(
   member: GuildMember,
   workspacePath: string,
 ) {
-  // Parse existing member list
   const membersPath = path.resolve(workspacePath, '.mococo/members.md');
   const members = new Map<string, string>();
   try {
@@ -91,10 +151,12 @@ function updateMemberTracking(
   console.log(`[member-tracking] ${action}: ${displayName} (${member.id})`);
 }
 
-// Shared resource registry for discord command name→id resolution
+// ---------------------------------------------------------------------------
+// Discord helpers
+// ---------------------------------------------------------------------------
+
 const registry = new ResourceRegistry();
 
-/** Send a message as a specific team using that team's own Discord bot */
 export async function sendAsTeam(channelId: string, team: TeamConfig, content: string) {
   const client = teamClients.get(team.id);
   if (!client) return;
@@ -102,7 +164,6 @@ export async function sendAsTeam(channelId: string, team: TeamConfig, content: s
   const channel = client.channels.cache.get(channelId) as TextChannel | undefined;
   if (!channel) return;
 
-  // Discord messages max 2000 chars; split if needed
   const chunks = splitMessage(content, 1900);
   for (const chunk of chunks) {
     await channel.send(chunk);
@@ -122,10 +183,17 @@ function splitMessage(text: string, maxLen: number): string[] {
   return chunks;
 }
 
-/** Create and login all team bots. Returns the leader client for admin commands. */
+// ---------------------------------------------------------------------------
+// Bot creation + message routing
+// ---------------------------------------------------------------------------
+
 export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<void> {
-  // Collect all bot user IDs so we can ignore messages from our own bots
   const botUserIds = new Set<string>();
+
+  // Dedup: prevent the same Discord message from being added to conversation
+  // history twice (leader + non-leader both receive the same messageCreate event)
+  const processedMsgIds = new Set<string>();
+  setInterval(() => processedMsgIds.clear(), 10 * 60_000);
 
   // Forward hook events as team progress in Discord
   hookEvents.on('any', async (event) => {
@@ -139,7 +207,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     }
   });
 
-  // Create one Discord client per team that has a token
   for (const team of Object.values(config.teams)) {
     if (!team.discordToken) {
       console.warn(`Team ${team.name} has no Discord token (${team.id.toUpperCase()}_DISCORD_TOKEN) — skipping`);
@@ -158,7 +225,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     client.on('clientReady', () => {
       if (client.user) {
         botUserIds.add(client.user.id);
-        // Auto-save Discord user ID to teams.json if not already set
         if (team.discordUserId !== client.user.id) {
           team.discordUserId = client.user.id;
           try {
@@ -172,7 +238,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         }
         console.log(`  ${team.name} bot online as @${client.user.tag}`);
 
-        // Leader: sync full member list on startup
         if (team.isLeader) {
           syncMemberList(client, config.workspacePath).catch(() => {});
         }
@@ -184,7 +249,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       client.on('guildMemberAdd', async (member: GuildMember) => {
         updateMemberTracking('join', member, config.workspacePath);
 
-        // If the new member is a mococo bot, trigger welcome flow
         const isMococo = Object.values(config.teams).some(
           t => t.discordUserId === member.id,
         );
@@ -199,7 +263,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             mentions: [team.id],
           };
           addMessage(channelId, triggerMsg);
-          handleTeamInvocation(team, triggerMsg, channelId, config, env);
+          handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
         }
       });
 
@@ -208,30 +272,22 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       });
     }
 
-    // Message handler for this team's bot
+    // Message handler
     client.on('messageCreate', async (msg: Message) => {
-      // Per-team channel filter: if channels are specified, only respond in those
       if (team.channels && team.channels.length > 0 && !team.channels.includes(msg.channelId)) return;
-
-      // Ignore messages from ANY of our team bots
       if (botUserIds.has(msg.author.id)) return;
-
-      // Ignore other bots (non-mococo bots)
       if (msg.author.bot) return;
 
       const content = msg.content.trim();
       if (!content) return;
 
-      // Only the Leader bot handles admin commands + unmentioned messages
       if (team.isLeader) {
         if (await handleAdminCommand(content, msg, config)) return;
 
-        // Check if message @mentions a specific non-leader bot via Discord
         const mentionsOtherBot = Object.values(config.teams).some(t =>
           !t.isLeader && t.discordUserId && msg.mentions.users.has(t.discordUserId)
         );
 
-        // Record human message
         const humanMsg: ConversationMessage = {
           teamId: 'human',
           teamName: msg.author.displayName,
@@ -240,18 +296,20 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           timestamp: new Date(),
           mentions: findMentionedTeams(content, config).map(t => t.id),
         };
-        addMessage(msg.channelId, humanMsg);
+        if (!processedMsgIds.has(msg.id)) {
+          processedMsgIds.add(msg.id);
+          addMessage(msg.channelId, humanMsg);
+        }
 
         // Leader reads every message — append to inbox for memory processing
-        appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId);
+        await appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId).catch(() => {});
 
-        // If user @mentioned a specific bot, let that bot's own handler deal with it
         if (mentionsOtherBot) return;
 
-        // Route: if message mentions specific teams by name, invoke them; otherwise invoke Leader
         const targetTeams = routeMessage(content, true, config);
+        const chain = newChain();
         for (const target of targetTeams) {
-          handleTeamInvocation(target, humanMsg, msg.channelId, config, env);
+          handleTeamInvocation(target, humanMsg, msg.channelId, config, env, chain);
         }
       }
       // Non-leader bots: only respond if this bot is @mentioned in Discord
@@ -264,8 +322,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           timestamp: new Date(),
           mentions: [team.id],
         };
-        addMessage(msg.channelId, humanMsg);
-        handleTeamInvocation(team, humanMsg, msg.channelId, config, env);
+        if (!processedMsgIds.has(msg.id)) {
+          processedMsgIds.add(msg.id);
+          addMessage(msg.channelId, humanMsg);
+        }
+        handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());
       }
     });
 
@@ -274,20 +335,8 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   }
 
   // Start periodic background tasks
-  startInboxCompactor(config, env, (team, channelId, systemMessage) => {
-    const triggerMsg: ConversationMessage = {
-      teamId: 'system',
-      teamName: 'System',
-      content: systemMessage,
-      timestamp: new Date(),
-      mentions: [team.id],
-    };
-    addMessage(channelId, triggerMsg);
-    handleTeamInvocation(team, triggerMsg, channelId, config, env);
-  });
+  startInboxCompactor(config, env, handleTeamInvocation);
   startMemoryConsolidator(config);
-
-  // Start improvement scanner (30min cycle: scan repos → save improvement.json → notify leader)
   startImprovementScanner(config, (team, channelId, systemMessage) => {
     const triggerMsg: ConversationMessage = {
       teamId: 'system',
@@ -297,9 +346,13 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       mentions: [team.id],
     };
     addMessage(channelId, triggerMsg);
-    handleTeamInvocation(team, triggerMsg, channelId, config, env);
+    handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
   }, env.workChannelId);
 }
+
+// ---------------------------------------------------------------------------
+// Admin commands
+// ---------------------------------------------------------------------------
 
 async function handleAdminCommand(
   content: string,
@@ -340,21 +393,53 @@ async function handleAdminCommand(
   return false;
 }
 
-async function handleTeamInvocation(
+// ---------------------------------------------------------------------------
+// Core: Team invocation + reactive dispatch
+// ---------------------------------------------------------------------------
+
+export async function handleTeamInvocation(
   team: TeamConfig,
   triggerMsg: ConversationMessage,
   channelId: string,
   config: TeamsConfig,
   env: EnvConfig,
+  chain: ChainContext = newChain(),
 ) {
+  // If already queued, don't pile on — drop with inbox fallback for leader
+  if (isQueued(team.id)) {
+    console.log(`[${team.name}] Already queued, skipping duplicate invocation`);
+    if (!team.isLeader) {
+      await appendToInbox(
+        Object.values(config.teams).find(t => t.isLeader)?.id ?? team.id,
+        'System',
+        `[큐 중복 방지] ${team.name} 호출 스킵됨 (이미 대기 중). 트리거: ${triggerMsg.content.slice(0, 100)}`,
+        config.workspacePath,
+        channelId,
+      ).catch(() => {});
+    }
+    return;
+  }
+
   if (isBusy(team.id)) {
     await waitForFree(team.id);
   }
 
   markBusy(team.id, triggerMsg.content.slice(0, 50));
-  console.log(`[${team.name}] Invoking (trigger: ${triggerMsg.content.slice(0, 80)})`);
+  console.log(`[${team.name}] Invoking (chain: ${chain.totalInvocations}/${chain.maxBudget}, trigger: ${triggerMsg.content.slice(0, 80)})`);
 
-  // Show typing indicator until the engine finishes
+  // Pre-read and atomically clear inbox for leader to prevent data loss.
+  // Messages arriving during engine execution go to a fresh file and survive.
+  let preloadedInbox: string | undefined;
+  if (team.isLeader) {
+    const inboxPath = path.resolve(config.workspacePath, '.mococo/inbox', `${team.id}.md`);
+    try { preloadedInbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
+    clearInbox(team.id, config.workspacePath);
+  } else {
+    // Non-leader: clear inbox to prevent unbounded growth
+    clearInbox(team.id, config.workspacePath);
+  }
+
+  // Show typing indicator
   const typingClient = teamClients.get(team.id);
   const typingChannel = typingClient?.channels.cache.get(channelId) as TextChannel | undefined;
   await typingChannel?.sendTyping().catch(() => {});
@@ -370,19 +455,18 @@ async function handleTeamInvocation(
       trigger: triggerMsg.teamId === 'human' ? 'human_message' : 'team_mention',
       message: triggerMsg,
       conversation,
-    }, config);
+    }, config, preloadedInbox);
 
     console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)})`);
 
-    // Strip memory/persona blocks before anything else (no guild needed)
+    // Strip memory/persona blocks
     let finalOutput = result.output;
     if (finalOutput) {
       finalOutput = stripMemoryBlocks(finalOutput, team.id, config.workspacePath);
     }
 
-    // Process discord commands (channels, threads, categories, messages) and clean output
+    // Process discord commands
     if (finalOutput) {
-      // Resolve guild from the channel
       const guildClient = teamClients.get(team.id);
       const guildChannel = guildClient?.channels.cache.get(channelId) as TextChannel | undefined;
       if (guildChannel?.guild) {
@@ -399,28 +483,28 @@ async function handleTeamInvocation(
       }
     }
 
+    // Send to Discord
     if (finalOutput) {
       await sendAsTeam(channelId, team, finalOutput);
     }
 
+    // Record in conversation history
+    const mentionedTeams = findMentionedTeams(result.output, config);
     const teamMsg: ConversationMessage = {
       teamId: team.id,
       teamName: team.name,
       content: finalOutput,
       timestamp: new Date(),
-      mentions: findMentionedTeams(result.output, config).map(t => t.id),
+      mentions: mentionedTeams.map(t => t.id),
     };
     addMessage(channelId, teamMsg);
 
-    // If this team's output mentions other teams, invoke them
-    // Skip recursive routing for leader — leader loop handles dispatch
-    if (!team.isLeader) {
-      const nextTeams = findMentionedTeams(finalOutput, config);
-      for (const nextTeam of nextTeams) {
-        if (nextTeam.id !== team.id) {
-          handleTeamInvocation(nextTeam, teamMsg, channelId, config, env);
-        }
-      }
+    // Resolve any pending dispatch records (this team reported back)
+    ledger.resolve(team.id, mentionedTeams.map(t => t.id));
+
+    // Reactive dispatch: invoke mentioned teams directly
+    if (finalOutput) {
+      dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -428,8 +512,82 @@ async function handleTeamInvocation(
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
     clearInterval(typingInterval);
-    // Leader inbox는 leader loop(inbox-compactor.ts)에서만 삭제
-    // 여기서 삭제하면 leader loop가 읽기 전에 유실됨
     markFree(team.id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reactive dispatch — bot output mentions → invoke those teams
+// ---------------------------------------------------------------------------
+
+function dispatchMentionedTeams(
+  finalOutput: string,
+  rawOutput: string,
+  sourceTeam: TeamConfig,
+  channelId: string,
+  config: TeamsConfig,
+  env: EnvConfig,
+  chain: ChainContext,
+): void {
+  const mentioned = findMentionedTeams(rawOutput, config);
+
+  for (const target of mentioned) {
+    // Skip self
+    if (target.id === sourceTeam.id) continue;
+
+    // Skip human mentions (not a team to invoke)
+    if (target.discordUserId === config.humanDiscordId) continue;
+
+    // Skip if already queued
+    if (isQueued(target.id)) {
+      console.log(`[dispatch] Skip ${target.name} — already queued`);
+      continue;
+    }
+
+    // Loop detection
+    if (detectLoop(chain, target.id)) {
+      console.log(`[dispatch] Loop detected: ${chain.recentPath.slice(-5).join('→')}→${target.id}, stopping`);
+      continue;
+    }
+
+    // Budget check
+    if (chain.totalInvocations >= chain.maxBudget) {
+      console.log(`[dispatch] Chain budget exhausted (${chain.maxBudget}), stopping`);
+      // Notify leader about budget exhaustion
+      const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+      if (leaderTeam && sourceTeam.id !== leaderTeam.id) {
+        appendToInbox(
+          leaderTeam.id,
+          'System',
+          `[체인 예산 초과] ${sourceTeam.name}의 chain이 ${chain.maxBudget}회 invoke에 도달. 추가 dispatch 중단됨.`,
+          config.workspacePath,
+          channelId,
+        ).catch(() => {});
+      }
+      break;
+    }
+
+    // Record in dispatch ledger
+    ledger.record(chain.chainId, sourceTeam.id, target.id, channelId, finalOutput.slice(0, 200));
+
+    const triggerMsg: ConversationMessage = {
+      teamId: sourceTeam.id,
+      teamName: sourceTeam.name,
+      content: finalOutput,
+      timestamp: new Date(),
+      mentions: [target.id],
+    };
+
+    console.log(`[dispatch] ${sourceTeam.name} → ${target.name} (chain ${chain.totalInvocations + 1}/${chain.maxBudget})`);
+
+    const nextChain: ChainContext = {
+      chainId: chain.chainId,
+      totalInvocations: chain.totalInvocations + 1,
+      maxBudget: chain.maxBudget,
+      recentPath: [...chain.recentPath.slice(-5), target.id],
+    };
+
+    // Fire and forget — don't await to allow parallel dispatches
+    handleTeamInvocation(target, triggerMsg, channelId, config, env, nextChain);
   }
 }

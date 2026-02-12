@@ -10,6 +10,7 @@ async function main() {
     workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
     memberTrackingChannelId: process.env.MEMBER_TRACKING_CHANNEL_ID || undefined,
+    decisionLogChannelId: process.env.DECISION_LOG_CHANNEL_ID || undefined,
   };
 
   if (!env.workChannelId) {

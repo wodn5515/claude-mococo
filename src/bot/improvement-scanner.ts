@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { runHaiku } from '../utils/haiku.js';
 import type { TeamsConfig, TeamConfig } from '../types.js';
 
 const SCAN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -10,43 +11,6 @@ type InvocationTrigger = (team: TeamConfig, channelId: string, systemMessage: st
 const SCANNABLE_EXTENSIONS = new Set(['.ts', '.js', '.py', '.json', '.md']);
 const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'dist', 'build']);
 const EXCLUDED_PATTERNS = [/\.lock$/];
-
-// ---------------------------------------------------------------------------
-// Shared utility -- run haiku via claude CLI
-// ---------------------------------------------------------------------------
-
-function runHaiku(prompt: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('claude', [
-      '-p',
-      '--model', 'haiku',
-      '--max-turns', '1',
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
-
-    child.stdin.write(prompt);
-    child.stdin.end();
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (err) => reject(err));
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`));
-      }
-    });
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Git helper -- run git command via spawn

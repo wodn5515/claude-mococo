@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { runHaiku } from '../utils/haiku.js';
 import { isBusy } from '../teams/concurrency.js';
 import type { TeamsConfig } from '../types.js';
 
@@ -32,51 +32,19 @@ Output EXACTLY this format (include both sections even if empty):
 ---END-SHORT-TERM---`;
 }
 
-function runClaudeConsolidate(prompt: string): Promise<{ longTerm: string; shortTerm: string } | null> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('claude', [
-      '-p',
-      '--model', 'haiku',
-      '--max-turns', '1',
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+function parseConsolidateResult(stdout: string): { longTerm: string; shortTerm: string } | null {
+  const longMatch = stdout.match(/---LONG-TERM---\n([\s\S]*?)\n---END-LONG-TERM---/);
+  const shortMatch = stdout.match(/---SHORT-TERM---\n([\s\S]*?)\n---END-SHORT-TERM---/);
 
-    child.stdin.write(prompt);
-    child.stdin.end();
+  if (!longMatch && !shortMatch) {
+    console.warn(`[memory-consolidator] Could not parse output, skipping`);
+    return null;
+  }
 
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (err) => reject(err));
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`));
-        return;
-      }
-
-      // Parse delimited output
-      const longMatch = stdout.match(/---LONG-TERM---\n([\s\S]*?)\n---END-LONG-TERM---/);
-      const shortMatch = stdout.match(/---SHORT-TERM---\n([\s\S]*?)\n---END-SHORT-TERM---/);
-
-      if (!longMatch && !shortMatch) {
-        console.warn(`[memory-consolidator] Could not parse output, skipping`);
-        resolve(null);
-        return;
-      }
-
-      resolve({
-        longTerm: longMatch?.[1]?.trim() ?? '',
-        shortTerm: shortMatch?.[1]?.trim() ?? '',
-      });
-    });
-  });
+  return {
+    longTerm: longMatch?.[1]?.trim() ?? '',
+    shortTerm: shortMatch?.[1]?.trim() ?? '',
+  };
 }
 
 async function consolidateTeam(teamId: string, teamName: string, config: TeamsConfig): Promise<void> {
@@ -90,16 +58,15 @@ async function consolidateTeam(teamId: string, teamName: string, config: TeamsCo
   try { shortTerm = fs.readFileSync(shortTermPath, 'utf-8').trim(); } catch {}
   try { longTerm = fs.readFileSync(longTermPath, 'utf-8').trim(); } catch {}
 
-  // Nothing to consolidate
   if (!shortTerm) return;
 
   const prompt = buildConsolidatePrompt(teamName, shortTerm, longTerm);
-  const result = await runClaudeConsolidate(prompt);
+  const output = await runHaiku(prompt);
+  const result = parseConsolidateResult(output);
   if (!result) return;
 
   fs.mkdirSync(memoryDir, { recursive: true });
 
-  // Write updated memories
   if (result.longTerm) {
     fs.writeFileSync(longTermPath, result.longTerm);
   }
@@ -121,7 +88,6 @@ function checkMemories(config: TeamsConfig): void {
 
 export function startMemoryConsolidator(config: TeamsConfig): void {
   console.log('[memory-consolidator] Started (interval: 6h)');
-  // Run first consolidation after 1 minute (let bots settle)
   setTimeout(() => {
     checkMemories(config);
     setInterval(() => checkMemories(config), CONSOLIDATE_INTERVAL_MS);

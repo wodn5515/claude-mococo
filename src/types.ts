@@ -63,7 +63,35 @@ export interface TeamInvocation {
 export interface EnvConfig {
   workChannelId?: string;
   hookPort: number;
-  memberTrackingChannelId?: string; // Channel to post member join/leave notifications
+  memberTrackingChannelId?: string;
+  decisionLogChannelId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Chain tracking — prevent infinite bot-to-bot loops
+// ---------------------------------------------------------------------------
+
+export interface ChainContext {
+  chainId: string;
+  totalInvocations: number;
+  maxBudget: number;
+  recentPath: string[];       // last N teamIds in this chain
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch ledger — track dispatched work for follow-up
+// ---------------------------------------------------------------------------
+
+export interface DispatchRecord {
+  id: string;
+  chainId: string;
+  fromTeam: string;
+  toTeam: string;
+  channelId: string;
+  reason: string;
+  dispatchedAt: number;
+  resolvedAt?: number;
+  resolved: boolean;
 }
 
 export interface HookEvent {

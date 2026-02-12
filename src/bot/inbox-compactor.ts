@@ -1,243 +1,233 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import type { TeamsConfig, TeamConfig, EnvConfig } from '../types.js';
-
-const LOOP_INTERVAL_MS = 60_000;
-
-type InvocationTrigger = (team: TeamConfig, channelId: string, systemMessage: string) => void;
-
-// ---------------------------------------------------------------------------
-// Shared utility — run haiku via claude CLI
-// ---------------------------------------------------------------------------
-
-function runHaiku(prompt: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('claude', [
-      '-p',
-      '--model', 'haiku',
-      '--max-turns', '1',
-    ], { stdio: ['pipe', 'pipe', 'pipe'] });
-
-    child.stdin.write(prompt);
-    child.stdin.end();
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (err) => reject(err));
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`));
-      }
-    });
-  });
-}
+import { runHaiku } from '../utils/haiku.js';
+import { isBusy, isQueued } from '../teams/concurrency.js';
+import { ledger } from '../teams/dispatch-ledger.js';
+import { addMessage } from '../teams/context.js';
+import { newChain } from './client.js';
+import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
-// Inbox channel parser — group messages by channelId
+// Constants
 // ---------------------------------------------------------------------------
 
-function parseInboxChannels(content: string): Map<string, string[]> {
-  const channels = new Map<string, string[]>();
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    // Format: [2025-02-10 09:46 #ch:123456789] Sender: message
-    const match = line.match(/^\[([^\]]*?)\s+#ch:(\d+)\]\s+(.*)$/);
-    if (match) {
-      const channelId = match[2];
-      const rest = `[${match[1]}] ${match[3]}`; // reconstruct without #ch: for readability
-      if (!channels.has(channelId)) channels.set(channelId, []);
-      channels.get(channelId)!.push(rest);
-    } else {
-      // Fallback: no channelId — group under 'unknown'
-      if (!channels.has('unknown')) channels.set('unknown', []);
-      channels.get('unknown')!.push(line);
-    }
-  }
-  return channels;
-}
+const PENDING_TASK_INTERVAL_MS = 60_000;
+const DEBOUNCE_MS = 2_000;
+const HEARTBEAT_MS = 10 * 60_000;       // 10 minutes
+const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
+const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
+
+type InvocationHandler = (
+  team: TeamConfig,
+  triggerMsg: ConversationMessage,
+  channelId: string,
+  config: TeamsConfig,
+  env: EnvConfig,
+  chain: ChainContext,
+) => void;
 
 // ---------------------------------------------------------------------------
-// Leader autonomous loop — haiku evaluates inbox → dispatch teams
+// Mutex for leader heartbeat (prevent concurrent execution)
 // ---------------------------------------------------------------------------
 
-function buildTeamRoleSummary(team: TeamConfig, workspacePath: string): string {
-  try {
-    const promptPath = path.resolve(workspacePath, team.prompt);
-    const content = fs.readFileSync(promptPath, 'utf-8');
-    const first30 = content.split('\n').slice(0, 30).join('\n');
-    // Extract a one-line role from the first 30 lines
-    const roleMatch = first30.match(/(?:역할|role|담당)[：:]\s*(.+)/i)
-      || first30.match(/^#\s+(.+)/m);
-    return roleMatch ? roleMatch[1].trim() : team.name;
-  } catch {
-    return team.name;
-  }
-}
+let heartbeatRunning = false;
 
-function buildDispatchPrompt(
-  teams: TeamConfig[],
-  channelMessages: Map<string, string[]>,
-  workspacePath: string,
+// ---------------------------------------------------------------------------
+// Leader heartbeat — haiku triage → leader self-invoke
+// ---------------------------------------------------------------------------
+
+function buildTriagePrompt(
+  inbox: string,
+  unresolvedCount: number,
+  improvementReport: string | null,
 ): string {
-  const teamList = teams
-    .filter(t => !t.isLeader)
-    .map(t => `- ${t.id}: ${t.name} — ${buildTeamRoleSummary(t, workspacePath)}`)
-    .join('\n');
+  return `You are a triage assistant. Decide if the leader coordinator needs to be woken up.
 
-  let channelSections = '';
-  for (const [channelId, messages] of channelMessages) {
-    if (channelId === 'unknown') continue;
-    channelSections += `\n### Channel #${channelId}\n${messages.join('\n')}\n`;
-  }
+## Leader Inbox
+${inbox || '(empty)'}
 
-  return `You are the leader coordinator evaluating conversations for your team.
+## Unresolved Dispatches
+${unresolvedCount > 0 ? `${unresolvedCount} team(s) have not reported back yet.` : '(none)'}
 
-## Team Members
-${teamList}
-
-## New Messages (by channel)
-${channelSections || '(no messages)'}
+## Improvement Report
+${improvementReport || '(none)'}
 
 ## Rules
-- 각 팀의 전문 분야에 맞는 대화가 있으면 해당 팀 호출
-- 이미 해결된 대화, 단순 인사, 이미 invoke된 팀에 대해서는 호출 불필요
-- 여러 팀을 같은 채널에 호출 가능
-- 호출이 필요 없으면 NONE
+- New human messages → INVOKE
+- Team reports/delegation requests → INVOKE
+- Unresolved dispatches (5min+) → INVOKE
+- High severity improvement issues → INVOKE
+- Empty inbox + no unresolved + no issues → NO
 
-Output format:
-DISPATCH: teamId,channelId,이유 (한 줄에 하나)
-DISPATCH: teamId,channelId,이유
-(없으면 한 줄: DISPATCH: NONE)
-SUMMARY: 리더용 inbox 요약 (한국어 bullet list, 500자 이내)`;
+Output ONE line:
+INVOKE: (reason summary in Korean, 1 line)
+or
+NO`;
 }
 
-interface DispatchResult {
-  dispatches: { teamId: string; channelId: string; reason: string }[];
-  summary: string;
-}
-
-function parseDispatchResult(output: string): DispatchResult {
-  const dispatches: { teamId: string; channelId: string; reason: string }[] = [];
-  let summary = '';
-
-  const lines = output.split('\n');
-  for (const line of lines) {
-    const dispatchMatch = line.match(/^DISPATCH:\s*(\S+)\s*,\s*(\S+)\s*,\s*(.+)$/);
-    if (dispatchMatch && dispatchMatch[1] !== 'NONE') {
-      dispatches.push({
-        teamId: dispatchMatch[1],
-        channelId: dispatchMatch[2],
-        reason: dispatchMatch[3].trim(),
-      });
-    }
-
-    const summaryMatch = line.match(/^SUMMARY:\s*(.+)$/);
-    if (summaryMatch) {
-      summary = summaryMatch[1].trim();
-    }
-  }
-
-  // Multi-line SUMMARY: collect everything after the SUMMARY line
-  const summaryIdx = lines.findIndex(l => l.startsWith('SUMMARY:'));
-  if (summaryIdx >= 0) {
-    const rest = lines.slice(summaryIdx + 1).join('\n').trim();
-    if (rest) {
-      summary = summary ? `${summary}\n${rest}` : rest;
-    }
-  }
-
-  return { dispatches, summary };
-}
-
-async function leaderLoop(
+async function leaderHeartbeat(
   config: TeamsConfig,
-  triggerInvocation: InvocationTrigger,
+  env: EnvConfig,
+  triggerInvocation: InvocationHandler,
 ): Promise<void> {
-  const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
-  if (!leaderTeam) return;
-
-  const ws = config.workspacePath;
-  const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
-
-  let inboxContent: string;
-  try {
-    inboxContent = fs.readFileSync(inboxPath, 'utf-8').trim();
-  } catch {
-    return; // No inbox file
-  }
-
-  if (!inboxContent) return;
-
-  // Parse channels from inbox
-  const channelMessages = parseInboxChannels(inboxContent);
-  if (channelMessages.size === 0) return;
-
-  const allTeams = Object.values(config.teams);
-  const prompt = buildDispatchPrompt(allTeams, channelMessages, ws);
-
-  console.log('[leader-loop] Evaluating inbox with haiku...');
+  if (heartbeatRunning) return;
+  heartbeatRunning = true;
 
   try {
-    const output = await runHaiku(prompt);
-    const result = parseDispatchResult(output);
+    const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+    if (!leaderTeam) return;
+    if (isBusy(leaderTeam.id) || isQueued(leaderTeam.id)) return;
 
-    // Execute dispatches
-    for (const dispatch of result.dispatches) {
-      const team = config.teams[dispatch.teamId];
-      if (!team) {
-        console.warn(`[leader-loop] Unknown team: ${dispatch.teamId}`);
-        continue;
+    const ws = config.workspacePath;
+    const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
+
+    // Gather context
+    let inbox = '';
+    try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
+
+    const unresolved = ledger.getUnresolved(5 * 60_000); // 5min+
+
+    let improvementReport: string | null = null;
+    try {
+      const raw = fs.readFileSync(path.resolve(ws, '.mococo/inbox/improvement.json'), 'utf-8');
+      const data = JSON.parse(raw);
+      const highIssues = (data.issues ?? []).filter((i: { severity: string }) => i.severity === 'high');
+      if (highIssues.length > 0) {
+        improvementReport = `${highIssues.length} high-severity issue(s) found`;
       }
+    } catch {}
 
-      console.log(`[leader-loop] Dispatching ${team.name} → channel ${dispatch.channelId} (${dispatch.reason})`);
-      triggerInvocation(team, dispatch.channelId, `[리더 자율 판단] ${dispatch.reason}`);
+    // Nothing to evaluate
+    if (!inbox && unresolved.length === 0 && !improvementReport) return;
+
+    // Haiku triage
+    const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport);
+    const triageResult = await runHaiku(triagePrompt);
+
+    if (triageResult.startsWith('NO')) {
+      console.log('[heartbeat] Haiku triage: no leader intervention needed');
+      return;
     }
 
-    // Save summary to leader's short-term memory
-    if (result.summary) {
-      const memoryDir = path.resolve(ws, '.mococo/memory', leaderTeam.id);
-      fs.mkdirSync(memoryDir, { recursive: true });
-      const shortTermPath = path.resolve(memoryDir, 'short-term.md');
+    // Extract reason from "INVOKE: reason"
+    const reason = triageResult.replace(/^INVOKE:\s*/, '').trim() || 'inbox 확인 필요';
 
-      let existing = '';
-      try {
-        existing = fs.readFileSync(shortTermPath, 'utf-8').trim();
-      } catch {}
+    console.log(`[heartbeat] Invoking leader: ${reason}`);
 
-      const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-      const updated = existing
-        ? `${existing}\n\n## Inbox Summary (${ts})\n${result.summary}`
-        : `## Inbox Summary (${ts})\n${result.summary}`;
-      fs.writeFileSync(shortTermPath, updated);
+    const channelId = env.workChannelId;
+    if (!channelId) {
+      console.warn('[heartbeat] No workChannelId configured, cannot invoke leader');
+      return;
     }
 
-    // Clear leader inbox
-    try { fs.unlinkSync(inboxPath); } catch {}
-
-    if (result.dispatches.length > 0) {
-      console.log(`[leader-loop] Dispatched ${result.dispatches.length} team(s)`);
-    } else {
-      console.log('[leader-loop] No dispatch needed');
-    }
+    const systemMsg: ConversationMessage = {
+      teamId: 'system',
+      teamName: 'System',
+      content: `[자율 판단] ${reason}`,
+      timestamp: new Date(),
+      mentions: [leaderTeam.id],
+    };
+    addMessage(channelId, systemMsg);
+    triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
+    // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
-    console.error(`[leader-loop] Error: ${err}`);
+    console.error(`[heartbeat] Error: ${err}`);
+  } finally {
+    heartbeatRunning = false;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Team pending task loop — check short-term memory for 대기 항목
+// Follow-up loop — check dispatch ledger for unreported work
+// ---------------------------------------------------------------------------
+
+async function followUpLoop(
+  config: TeamsConfig,
+  env: EnvConfig,
+  triggerInvocation: InvocationHandler,
+): Promise<void> {
+  const unresolved = ledger.getUnresolved();
+
+  for (const record of unresolved) {
+    const team = config.teams[record.toTeam];
+    if (!team) continue;
+
+    const elapsedMin = (Date.now() - record.dispatchedAt) / 60_000;
+
+    // Still working → wait
+    if (isBusy(team.id)) continue;
+
+    // Just finished → give it a moment
+    if (elapsedMin < 5) continue;
+
+    // Already queued → don't pile on
+    if (isQueued(team.id)) continue;
+
+    if (elapsedMin < 15) {
+      // 5-15 min: nudge the team to report
+      console.log(`[follow-up] Nudging ${team.name} to report (${Math.round(elapsedMin)}min since dispatch)`);
+      const nudgeMsg: ConversationMessage = {
+        teamId: 'system',
+        teamName: 'System',
+        content: `[보고 요청] 이전 작업 결과를 보고해주세요. 작업 내용: ${record.reason}`,
+        timestamp: new Date(),
+        mentions: [team.id],
+      };
+      addMessage(record.channelId, nudgeMsg);
+      triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
+      break; // One nudge per cycle
+    } else {
+      // 15min+: notify leader
+      const leader = Object.values(config.teams).find(t => t.isLeader);
+      if (leader && !isBusy(leader.id) && !isQueued(leader.id)) {
+        console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min`);
+        const alertMsg: ConversationMessage = {
+          teamId: 'system',
+          teamName: 'System',
+          content: `[미보고 알림] ${team.name}가 ${Math.round(elapsedMin)}분째 보고하지 않음. 작업: ${record.reason}`,
+          timestamp: new Date(),
+          mentions: [leader.id],
+        };
+        if (env.workChannelId) {
+          addMessage(env.workChannelId, alertMsg);
+          triggerInvocation(leader, alertMsg, env.workChannelId, config, env, newChain());
+        }
+      }
+      // Expire very old records (60min+)
+      if (elapsedMin > 60) {
+        record.resolved = true;
+        record.resolvedAt = Date.now();
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Daily digest — leader summarizes for human
+// ---------------------------------------------------------------------------
+
+async function dailyDigest(
+  config: TeamsConfig,
+  env: EnvConfig,
+  triggerInvocation: InvocationHandler,
+): Promise<void> {
+  const leader = Object.values(config.teams).find(t => t.isLeader);
+  if (!leader) return;
+  if (!env.workChannelId) return;
+
+  const digestMsg: ConversationMessage = {
+    teamId: 'system',
+    teamName: 'System',
+    content: `[일일 보고] 지난 24시간 활동을 정리해서 회장님께 보고하세요. 완료 작업, 미해소 건, 발견된 이슈를 요약하세요. 반드시 회장님을 태그하세요.`,
+    timestamp: new Date(),
+    mentions: [leader.id],
+  };
+  addMessage(env.workChannelId, digestMsg);
+  triggerInvocation(leader, digestMsg, env.workChannelId, config, env, newChain());
+}
+
+// ---------------------------------------------------------------------------
+// Pending task loop — check short-term memory for 대기 항목
 // ---------------------------------------------------------------------------
 
 interface PendingTask {
@@ -245,41 +235,62 @@ interface PendingTask {
   reason: string;
 }
 
+function shouldSkipTask(taskLine: string): boolean {
+  if (/\[BLOCKED\]/i.test(taskLine)) return true;
+  if (/\[SCHEDULED:(\d{4}-\d{2}-\d{2}|tomorrow)\]/i.test(taskLine)) {
+    const match = taskLine.match(/\[SCHEDULED:(\d{4}-\d{2}-\d{2}|tomorrow)\]/i);
+    if (match) {
+      const value = match[1].toLowerCase();
+      if (value === 'tomorrow') return true;
+      const scheduledDate = new Date(value);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (scheduledDate > today) return true;
+    }
+  }
+  return false;
+}
+
 function findPendingTasks(shortTermContent: string): PendingTask[] {
   const tasks: PendingTask[] = [];
-
-  // Find the "### 대기 항목" section
   const sectionMatch = shortTermContent.match(/###\s*대기\s*항목\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
   if (!sectionMatch) return tasks;
 
   const section = sectionMatch[1];
-  // Extract items with #ch:channelId
   const lines = section.split('\n');
   for (const line of lines) {
+    if (shouldSkipTask(line)) continue;
+
     const chMatch = line.match(/#ch:(\d+)/);
     if (chMatch) {
       const channelId = chMatch[1];
-      // Clean reason: remove the channel marker and bullet points
-      const reason = line.replace(/#ch:\d+/, '').replace(/^[\s\-*]+/, '').trim();
+      const reason = line
+        .replace(/#ch:\d+/, '')
+        .replace(/\[READY\]/gi, '')
+        .replace(/^[\s\-*]+/, '')
+        .trim();
       if (reason) {
         tasks.push({ channelId, reason });
       }
     }
   }
-
   return tasks;
 }
 
 async function pendingTaskLoop(
   config: TeamsConfig,
-  triggerInvocation: InvocationTrigger,
+  env: EnvConfig,
+  triggerInvocation: InvocationHandler,
 ): Promise<void> {
   const ws = config.workspacePath;
+  let invoked = 0;
+  const MAX_INVOCATIONS_PER_CYCLE = 2; // Limit concurrent invocations per cycle
 
   for (const team of Object.values(config.teams)) {
     if (team.isLeader) continue;
+    if (isBusy(team.id) || isQueued(team.id)) continue;
+    if (invoked >= MAX_INVOCATIONS_PER_CYCLE) break;
 
-    // Read short-term memory
     const shortTermPath = path.resolve(ws, '.mococo/memory', team.id, 'short-term.md');
     let shortTerm: string;
     try {
@@ -293,33 +304,92 @@ async function pendingTaskLoop(
     const pendingTasks = findPendingTasks(shortTerm);
     if (pendingTasks.length === 0) continue;
 
-    // Trigger invocation for the first pending task
     const task = pendingTasks[0];
     console.log(`[pending-task] ${team.name} has pending work → channel ${task.channelId} (${task.reason})`);
-    triggerInvocation(team, task.channelId, `[자율실행] 미완료 작업 확인: ${task.reason}`);
+
+    const triggerMsg: ConversationMessage = {
+      teamId: 'system',
+      teamName: 'System',
+      content: `[자율실행] 미완료 작업 확인: ${task.reason}`,
+      timestamp: new Date(),
+      mentions: [team.id],
+    };
+    addMessage(task.channelId, triggerMsg);
+    triggerInvocation(team, triggerMsg, task.channelId, config, env, newChain());
+    invoked++;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Main entry point — start both loops
+// Main entry point
 // ---------------------------------------------------------------------------
 
 export function startInboxCompactor(
   config: TeamsConfig,
   env: EnvConfig,
-  triggerInvocation: InvocationTrigger,
+  triggerInvocation: InvocationHandler,
 ): void {
-  console.log('[inbox-compactor] Started leader loop + pending task loop (interval: 60s)');
+  console.log('[inbox-compactor] Started: heartbeat(10m) + fs.watch + follow-up(2m) + pending(60s) + digest(24h)');
 
-  setInterval(() => {
-    // Leader autonomous loop
-    leaderLoop(config, triggerInvocation).catch(err => {
-      console.error(`[leader-loop] Unhandled error: ${err}`);
+  const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+  if (!leaderTeam) {
+    console.warn('[inbox-compactor] No leader team found');
+    return;
+  }
+
+  const ws = config.workspacePath;
+  const inboxDir = path.resolve(ws, '.mococo/inbox');
+  fs.mkdirSync(inboxDir, { recursive: true });
+
+  let debounceTimer: NodeJS.Timeout | null = null;
+
+  const executeHeartbeat = () => {
+    leaderHeartbeat(config, env, triggerInvocation).catch(err => {
+      console.error(`[heartbeat] Unhandled error: ${err}`);
     });
+  };
 
-    // Team pending task loop
-    pendingTaskLoop(config, triggerInvocation).catch(err => {
+  // fs.watch for immediate inbox change detection
+  try {
+    fs.watch(inboxDir, (eventType, filename) => {
+      if (filename !== `${leaderTeam.id}.md`) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        console.log('[inbox-compactor] Inbox changed, executing heartbeat');
+        executeHeartbeat();
+      }, DEBOUNCE_MS);
+    });
+    console.log(`[inbox-compactor] Watching ${inboxDir} for changes`);
+  } catch (err) {
+    console.error(`[inbox-compactor] Failed to watch inbox directory: ${err}`);
+  }
+
+  // Leader heartbeat: periodic check every 10 minutes
+  setInterval(executeHeartbeat, HEARTBEAT_MS);
+
+  // Follow-up loop: check dispatch ledger every 2 minutes
+  setInterval(() => {
+    followUpLoop(config, env, triggerInvocation).catch(err => {
+      console.error(`[follow-up] Unhandled error: ${err}`);
+    });
+  }, FOLLOW_UP_MS);
+
+  // Pending task loop: every 60 seconds
+  setInterval(() => {
+    pendingTaskLoop(config, env, triggerInvocation).catch(err => {
       console.error(`[pending-task] Unhandled error: ${err}`);
     });
-  }, LOOP_INTERVAL_MS);
+  }, PENDING_TASK_INTERVAL_MS);
+
+  // Daily digest: every 24 hours (first run after 1 hour)
+  setTimeout(() => {
+    dailyDigest(config, env, triggerInvocation).catch(err => {
+      console.error(`[daily-digest] Unhandled error: ${err}`);
+    });
+    setInterval(() => {
+      dailyDigest(config, env, triggerInvocation).catch(err => {
+        console.error(`[daily-digest] Unhandled error: ${err}`);
+      });
+    }, DAILY_DIGEST_MS);
+  }, 60 * 60_000);
 }
