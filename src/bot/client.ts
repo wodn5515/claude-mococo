@@ -564,6 +564,60 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     addMessage(channelId, triggerMsg);
     handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
   }, env.workChannelId || env.memberTrackingChannelId);
+
+  // Leader startup message — notify channel and invoke leader for memory cleanup
+  const startupLeader = Object.values(config.teams).find(t => t.isLeader);
+  const startupChannelId = env.workChannelId || env.memberTrackingChannelId;
+  if (startupLeader && startupChannelId) {
+    // Delay to ensure all bots are ready and background tasks initialized
+    setTimeout(async () => {
+      try {
+        // Read leader's short-term memory once for pending tasks & in-progress
+        const shortTermPath = path.resolve(config.workspacePath, '.mococo/memory', startupLeader.id, 'short-term.md');
+        let pendingSummary = '';
+        let inProgressSummary = '';
+        try {
+          const stm = fs.readFileSync(shortTermPath, 'utf-8');
+
+          const pendingMatch = stm.match(/###\s*대기\s*항목\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
+          if (pendingMatch) {
+            const lines = pendingMatch[1].split('\n').filter(l => /^\s*-\s+.+/.test(l));
+            if (lines.length > 0) {
+              pendingSummary = `\n\n**대기 항목 (${lines.length}건):**\n${lines.join('\n')}`;
+            }
+          }
+
+          const progressMatch = stm.match(/###\s*진행중\s*작업\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
+          if (progressMatch) {
+            const lines = progressMatch[1].split('\n').filter(l => /^\s*-\s+.+/.test(l));
+            if (lines.length > 0) {
+              inProgressSummary = `\n\n**진행중 작업 (${lines.length}건):**\n${lines.join('\n')}`;
+            }
+          }
+        } catch { /* no short-term memory yet */ }
+
+        const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' });
+        const startupContent = `🔄 **시스템 재시작 완료** (${now} KST)${inProgressSummary}${pendingSummary}\n\n메모리 상태를 정리하겠습니다.`;
+
+        const systemMsg: ConversationMessage = {
+          teamId: 'system',
+          teamName: 'System',
+          content: `[시스템 재시작] 봇이 재시작되었습니다. 메모리 상태를 점검하고, 대기중 작업을 확인한 후, 채널에 상태 정리 메시지를 출력하세요.`,
+          timestamp: new Date(),
+          mentions: [startupLeader.id],
+        };
+
+        await sendAsTeam(startupChannelId, startupLeader, startupContent).catch(err =>
+          console.warn('[startup] sendAsTeam failed:', err instanceof Error ? err.message : err),
+        );
+        addMessage(startupChannelId, systemMsg);
+        handleTeamInvocation(startupLeader, systemMsg, startupChannelId, config, env, newChain());
+        console.log('[startup] Leader startup message sent and invocation triggered');
+      } catch (err) {
+        console.error(`[startup] Failed to send startup message: ${err}`);
+      }
+    }, 5_000); // 5 second delay after all bots ready
+  }
 }
 
 // ---------------------------------------------------------------------------
