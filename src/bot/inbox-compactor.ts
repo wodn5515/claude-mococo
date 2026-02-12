@@ -21,7 +21,7 @@ const DEBOUNCE_MS = 2_000;
 const HEARTBEAT_MS = 10 * 60_000;       // 10 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
-const PENDING_TASK_COOLDOWN_MS = 30 * 60_000; // 30 minutes cooldown per team
+const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
 const HR_EVAL_MS = 2 * 60 * 60_000; // 2 hours
 
 type InvocationHandler = (
@@ -279,11 +279,11 @@ async function followUpLoop(
       setFollowUpCooldown(team.id);
       break; // One nudge per cycle
     } else {
-      // 15min+: notify leader (only once, then auto-resolve)
+      // 15min+: notify leader ONCE, then auto-resolve to prevent infinite loop
       const leader = Object.values(config.teams).find(t => t.isLeader);
       // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
       if (leader && !isOccupied(leader.id)) {
-        console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min`);
+        console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min (auto-resolving after alert)`);
         const alertMsg: ConversationMessage = {
           teamId: 'system',
           teamName: 'System',
@@ -298,11 +298,10 @@ async function followUpLoop(
           triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
         }
       }
-      // Expire very old records (60min+)
-      if (elapsedMin > 60) {
-        ledger.resolveById(record.id);
-        nudgeCounts.delete(record.id);
-      }
+      // Auto-resolve after leader alert to prevent repeated notifications
+      ledger.resolveById(record.id);
+      nudgeCounts.delete(record.id);
+      console.log(`[follow-up] Auto-resolved record for ${team.name} after leader alert (${Math.round(elapsedMin)}min elapsed)`);
     }
   }
 }
