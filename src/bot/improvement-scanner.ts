@@ -26,6 +26,7 @@ interface GitResult {
 }
 
 const MAX_STDERR_BYTES = 4096;
+const TIMEOUT_MS = 30_000;
 
 function runGit(args: string[], cwd: string): Promise<GitResult> {
   return new Promise((resolve, reject) => {
@@ -34,6 +35,14 @@ function runGit(args: string[], cwd: string): Promise<GitResult> {
     let stdout = '';
     let stderr = '';
     let truncated = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      reject(new Error(`git timed out after ${TIMEOUT_MS}ms (cmd: git ${args.join(' ')})`));
+    }, TIMEOUT_MS);
 
     child.stdout.on('data', (chunk: Buffer) => {
       if (truncated) return;
@@ -55,8 +64,16 @@ function runGit(args: string[], cwd: string): Promise<GitResult> {
       }
     });
 
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (truncated) {
         if (stderr) console.warn(`[improvement-scanner] git stderr: ${stderr.slice(0, 200)}`);
         resolve({ output: stdout.trim(), truncated, stderr });

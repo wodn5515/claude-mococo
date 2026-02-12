@@ -39,14 +39,15 @@ interface InboxTask {
 
 const inboxWriteQueue: InboxTask[] = [];
 let isProcessingInboxQueue = false;
+let inboxQueueHead = 0;
 
 async function processInboxWriteQueue() {
-  if (isProcessingInboxQueue || inboxWriteQueue.length === 0) return;
+  if (isProcessingInboxQueue || inboxQueueHead >= inboxWriteQueue.length) return;
   isProcessingInboxQueue = true;
 
   try {
-    while (inboxWriteQueue.length > 0) {
-      const task = inboxWriteQueue.shift()!;
+    while (inboxQueueHead < inboxWriteQueue.length) {
+      const task = inboxWriteQueue[inboxQueueHead++];
       if (task.cancelled) continue; // timeout으로 취소된 task 스킵
       try {
         await task.fn();
@@ -56,33 +57,50 @@ async function processInboxWriteQueue() {
     }
   } finally {
     isProcessingInboxQueue = false;
+    // drain 완료 후 새 항목이 추가되었는지 확인하여 재처리
+    if (inboxQueueHead < inboxWriteQueue.length) {
+      processInboxWriteQueue();
+    } else {
+      // 완전히 비었을 때만 참조 해제
+      inboxWriteQueue.length = 0;
+      inboxQueueHead = 0;
+    }
   }
 }
 
 export function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      task.cancelled = true;
+      reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
+    }, 30_000);
+
     const task: InboxTask = {
       fn: async () => {
+        if (settled) return; // timeout already fired
         try {
           const dir = path.resolve(workspacePath, '.mococo/inbox');
           fs.mkdirSync(dir, { recursive: true });
           const file = path.resolve(dir, `${teamId}.md`);
           const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
           await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
+          if (settled) return;
+          settled = true;
           clearTimeout(timeout);
           resolve();
         } catch (err) {
+          if (settled) return;
+          settled = true;
           clearTimeout(timeout);
           reject(err);
         }
       },
       cancelled: false,
     };
-
-    const timeout = setTimeout(() => {
-      task.cancelled = true;
-      reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
-    }, 30_000);
 
     inboxWriteQueue.push(task);
     processInboxWriteQueue();
@@ -127,14 +145,18 @@ const MIN_REPEATS_FOR_LONGER_PERIODS = 2;
 
 function detectLoop(chain: ChainContext, nextTeamId: string): boolean {
   const trail = [...chain.recentPath, nextTeamId];
+  const trailLen = trail.length;
 
-  if (trail.length < MIN_TRAIL_LENGTH_FOR_DETECTION) return false;
+  // Invariant: trailLen must equal recentPath.length + 1 (nextTeamId appended)
+  if (trailLen !== chain.recentPath.length + 1) return false;
 
-  const maxPeriod = Math.floor(trail.length / 2);
+  if (trailLen < MIN_TRAIL_LENGTH_FOR_DETECTION) return false;
+
+  const maxPeriod = Math.floor(trailLen / 2);
   for (let period = MIN_CYCLE_PERIOD; period <= maxPeriod; period++) {
     const minRepeats = period === 2 ? MIN_REPEATS_FOR_PERIOD_2 : MIN_REPEATS_FOR_LONGER_PERIODS;
     const needed = period * minRepeats;
-    if (trail.length < needed) continue;
+    if (trailLen < needed) continue;
 
     const tail = trail.slice(-needed);
     const cycle = tail.slice(0, period);
@@ -253,22 +275,28 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   // Dedup: prevent the same Discord message from being added to conversation
   // history twice (leader + non-leader both receive the same messageCreate event)
   const processedMsgIds = new Map<string, number>(); // msgId → timestamp
-  const MAX_TRACKED_MSGS = 1000;
+  const MAX_TRACKED_MSGS = 500;
+  const MSG_EXPIRY_MS = 5 * 60_000; // 5분 경과 메시지 자동 만료
 
   function trimProcessedMsgs() {
-    if (processedMsgIds.size <= MAX_TRACKED_MSGS) return;
-    // Sort by timestamp and keep only the newest half
-    const entries = [...processedMsgIds.entries()].sort((a, b) => a[1] - b[1]);
-    const toRemove = entries.slice(0, entries.length - Math.floor(MAX_TRACKED_MSGS / 2));
-    for (const [id] of toRemove) processedMsgIds.delete(id);
-  }
-
-  setInterval(() => {
-    const cutoff = Date.now() - 10 * 60_000;
+    // 먼저 오래된 항목 시간 기반 제거
+    const cutoff = Date.now() - MSG_EXPIRY_MS;
     for (const [id, ts] of processedMsgIds) {
       if (ts < cutoff) processedMsgIds.delete(id);
     }
-  }, 5 * 60_000);
+    // 그래도 초과하면 FIFO 강제 제거 (Map 삽입 순서 이용)
+    if (processedMsgIds.size <= MAX_TRACKED_MSGS) return;
+    const overflow = processedMsgIds.size - MAX_TRACKED_MSGS;
+    let removed = 0;
+    for (const id of processedMsgIds.keys()) {
+      if (removed >= overflow) break;
+      processedMsgIds.delete(id);
+      removed++;
+    }
+  }
+
+  // 주기적 정리: 2분마다 만료 항목 제거
+  setInterval(() => trimProcessedMsgs(), 2 * 60_000);
 
   // Forward hook events as team progress in Discord
   hookEvents.on('any', async (event) => {
@@ -278,7 +306,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     if (event.hook_event_name === 'SubagentCompleted' && env.workChannelId) {
       await sendAsTeam(env.workChannelId, team,
         `Subtask done: **${event.task_subject ?? 'unknown'}** (${(event.teammate_name as string) ?? 'lead'})`
-      ).catch(() => {});
+      ).catch(err => console.warn('[hook-events] sendAsTeam failed:', err instanceof Error ? err.message : err));
     }
   });
 

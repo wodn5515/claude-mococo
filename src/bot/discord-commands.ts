@@ -7,9 +7,9 @@ import type { TeamConfig, TeamsConfig, EnvConfig } from '../types.js';
 // Strip memory/persona blocks — extracts content, saves to file, then strips
 // ---------------------------------------------------------------------------
 
-const MEMORY_RE = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---(?:\s*\n?```)?/g;
-const LONG_MEMORY_RE = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?---LONG-MEMORY---\n([\s\S]*?)\n---END-LONG-MEMORY---(?:\s*\n?```)?/g;
-const PERSONA_RE = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n([\s\S]*?)\n---END-PERSONA---(?:\s*\n?```)?/g;
+const MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---(?:\s*\n?```)?/g;
+const LONG_MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?---LONG-MEMORY---\n([\s\S]*?)\n---END-LONG-MEMORY---(?:\s*\n?```)?/g;
+const PERSONA_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n([\s\S]*?)\n---END-PERSONA---(?:\s*\n?```)?/g;
 
 export function stripMemoryBlocks(
   output: string,
@@ -18,27 +18,22 @@ export function stripMemoryBlocks(
 ): string {
   // Extract and save memory content before stripping
   if (teamId && workspacePath) {
-    let match: RegExpExecArray | null;
     const memDir = path.resolve(workspacePath, '.mococo/memory', teamId);
 
     // Short-term memory → {teamId}/short-term.md
-    const memRe = new RegExp(MEMORY_RE.source, 'g');
-    while ((match = memRe.exec(output)) !== null) {
-      const content = match[1];
-      if (content) {
+    for (const match of output.matchAll(MEMORY_PATTERN)) {
+      if (match[1]) {
         fs.mkdirSync(memDir, { recursive: true });
-        fs.writeFileSync(path.resolve(memDir, 'short-term.md'), content);
+        fs.writeFileSync(path.resolve(memDir, 'short-term.md'), match[1]);
         console.log(`[strip] Updated short-term memory for ${teamId}`);
       }
     }
 
     // Long-term memory → {teamId}/long-term.md
-    const longMemRe = new RegExp(LONG_MEMORY_RE.source, 'g');
-    while ((match = longMemRe.exec(output)) !== null) {
-      const content = match[1];
-      if (content) {
+    for (const match of output.matchAll(LONG_MEMORY_PATTERN)) {
+      if (match[1]) {
         fs.mkdirSync(memDir, { recursive: true });
-        fs.writeFileSync(path.resolve(memDir, 'long-term.md'), content);
+        fs.writeFileSync(path.resolve(memDir, 'long-term.md'), match[1]);
         console.log(`[strip] Updated long-term memory for ${teamId}`);
       }
     }
@@ -47,9 +42,9 @@ export function stripMemoryBlocks(
   }
 
   return output
-    .replace(MEMORY_RE, '')
-    .replace(LONG_MEMORY_RE, '')
-    .replace(PERSONA_RE, '')
+    .replace(MEMORY_PATTERN, '')
+    .replace(LONG_MEMORY_PATTERN, '')
+    .replace(PERSONA_PATTERN, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -98,10 +93,22 @@ interface ParsedCommand {
 /**
  * 코드 블록 내 명령어 매칭 방지를 위해 트리플 백틱 펜스 내용을 마스킹.
  * non-greedy 매칭([\s\S]*?)으로 중첩/연속 코드 블록도 올바르게 처리됨.
- * 참고: 인덴트 기반 코드 블록(4 spaces)은 Discord에서 거의 사용되지 않으므로 미처리.
+ * Discord markdown에서 ``` 는 중첩 불가 — 첫 번째 닫는 ``` 가 항상 블록 종료.
+ * 인라인 코드(`...`)도 마스킹하여 코드 내 명령어 실행 방지.
  */
 function maskCodeFences(text: string): string {
-  return text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
+  // 1. Mask paired triple backtick fences (우선순위 높음)
+  let masked = text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
+  // 2. Mask unclosed triple backtick fence (opening ``` without closing)
+  masked = masked.replace(/```[\s\S]*$/g, m => ' '.repeat(m.length));
+  // 3. Mask inline code (단일 백틱) — skip regions already masked (all-spaces) by steps 1-2
+  masked = masked.replace(/`[^`]+`/g, (m, offset) => {
+    // Check if this region was already masked (all spaces = inside a code block that was masked)
+    const region = masked.slice(offset, offset + m.length);
+    if (/^ +$/.test(region)) return region; // already masked, leave as-is
+    return ' '.repeat(m.length);
+  });
+  return masked;
 }
 
 function parseCommands(output: string): ParsedCommand[] {
@@ -161,14 +168,32 @@ const MAX_PARAM_VALUE_LENGTH = 2000;
 function parseParams(paramStr: string): Record<string, string> {
   const params: Record<string, string> = {};
   // key: 영문자/언더스코어 시작, 이후 영문자/숫자/언더스코어/하이픈만 허용
+  // value(따옴표 있음): 이스케이프 시퀀스(\\, \")를 포함한 문자열 매칭
   // value(따옴표 없음): 안전한 문자만 허용 (영숫자, 점, 슬래시, 콜론, @, #, 콤마, +, -)
-  const re = /([a-zA-Z_][\w-]*)=(?:"([^"]*)"|([\w./:@#,+-]+))/g;
+  const re = /([a-zA-Z_][\w-]*)=(?:"((?:[^"\\]|\\.)*)"|([^\s"]+))/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(paramStr)) !== null) {
     let value = m[2] ?? m[3];
-    // 큰따옴표 내 이스케이프 시퀀스 처리: \" → ", \\ → \
     if (m[2] !== undefined) {
-      value = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      // 큰따옴표 내 이스케이프: \" → ", \\ → \ 만 허용. 기타 \x 시퀀스는 리터럴 유지
+      value = value.replace(/\\(["\\])|\\(.)/g, (_, allowed, literal) => allowed ?? `\\${literal}`);
+      // Path traversal 방지 (quoted 값): 파일 경로 관련 키에만 적용, _content 등 본문 키 제외
+      const key = m[1];
+      if (!key.endsWith('_content') && (/\.\.[\\/]/.test(value) || value.includes('..'))) {
+        console.warn(`[discord-cmd] Param "${key}" (quoted) contains path traversal sequence, skipping`);
+        continue;
+      }
+    } else {
+      // 따옴표 없는 값: 안전한 문자 화이트리스트 검증
+      if (!/^[\w./:@#,+-]+$/.test(value)) {
+        console.warn(`[discord-cmd] Param "${m[1]}" contains unsafe characters, skipping`);
+        continue;
+      }
+      // Path traversal 방지: .. 시퀀스 차단
+      if (/\.\.[\\/]/.test(value) || value.includes('..')) {
+        console.warn(`[discord-cmd] Param "${m[1]}" contains path traversal sequence, skipping`);
+        continue;
+      }
     }
     // Truncate overly long values
     if (value.length > MAX_PARAM_VALUE_LENGTH) {

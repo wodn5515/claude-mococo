@@ -4,11 +4,17 @@ import type { DispatchRecord } from '../types.js';
 const MAX_RECORDS = 200;
 /** 해결된 레코드 만료 시간 (기본 1시간) */
 const EXPIRE_MS = 60 * 60 * 1000; // 1 hour
-/** 미해결 레코드 강제 만료 시간 — EXPIRE_MS의 배수로 설정 (기본 3배 = 3시간) */
-const HARD_CUTOFF_MULTIPLIER = 3;
+/** 미해결 레코드 강제 만료 시간 기본값 (6시간) */
+const DEFAULT_HARD_CUTOFF_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 class DispatchLedger {
-  private records: DispatchRecord[] = [];
+  private records: (DispatchRecord & { hardCutoffMs?: number })[] = [];
+  private hardCutoffMs = DEFAULT_HARD_CUTOFF_MS;
+
+  /** Override default hard cutoff (e.g., based on team maxBudget). */
+  setHardCutoffMs(ms: number): void {
+    this.hardCutoffMs = ms;
+  }
 
   record(
     chainId: string,
@@ -16,8 +22,9 @@ class DispatchLedger {
     toTeam: string,
     channelId: string,
     reason: string,
+    hardCutoffMs?: number,
   ): DispatchRecord {
-    const rec: DispatchRecord = {
+    const rec: DispatchRecord & { hardCutoffMs?: number } = {
       id: crypto.randomUUID(),
       chainId,
       fromTeam,
@@ -26,6 +33,7 @@ class DispatchLedger {
       reason: reason.slice(0, 200),
       dispatchedAt: Date.now(),
       resolved: false,
+      hardCutoffMs,
     };
     this.records.push(rec);
     this.cleanup();
@@ -73,11 +81,17 @@ class DispatchLedger {
    * Remove expired records to prevent memory growth.
    */
   private cleanup(): void {
-    const cutoff = Date.now() - EXPIRE_MS;
-    const hardCutoff = Date.now() - EXPIRE_MS * HARD_CUTOFF_MULTIPLIER;
+    const now = Date.now();
+    const cutoff = now - EXPIRE_MS;
     this.records = this.records
       .filter(r => {
-        if (r.dispatchedAt < hardCutoff) return false; // force expire old unresolved
+        const recCutoff = now - (r.hardCutoffMs ?? this.hardCutoffMs);
+        if (r.dispatchedAt < recCutoff) {
+          if (!r.resolved) {
+            console.warn(`[dispatch-ledger] Force-expiring unresolved record: ${r.fromTeam}→${r.toTeam} (${r.reason.slice(0, 50)})`);
+          }
+          return false;
+        }
         return r.dispatchedAt > cutoff || !r.resolved;
       })
       .slice(-MAX_RECORDS);

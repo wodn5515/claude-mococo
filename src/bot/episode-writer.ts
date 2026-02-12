@@ -5,6 +5,17 @@ import type { Episode, ConversationMessage } from '../types.js';
 
 const MAX_EPISODE_LINES = 200;
 
+function atomicWriteSync(filePath: string, content: string): void {
+  const tmp = filePath + '.tmp';
+  try {
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // writeEpisode — Haiku로 요약 생성 후 episodes.jsonl에 append
 // ---------------------------------------------------------------------------
@@ -50,12 +61,14 @@ Output ONLY the summary text, nothing else.`;
   fs.appendFileSync(filePath, JSON.stringify(episode) + '\n');
 
   // Auto-truncate: keep only last MAX_EPISODE_LINES lines
+  // Note: writeEpisode is awaited before markFree (client.ts), so no concurrent
+  // writers exist for the same team. atomicWriteSync ensures crash-safe writes.
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n').filter(l => l.trim());
     if (lines.length > MAX_EPISODE_LINES) {
       const trimmed = lines.slice(-MAX_EPISODE_LINES).join('\n') + '\n';
-      fs.writeFileSync(filePath, trimmed);
+      atomicWriteSync(filePath, trimmed);
     }
   } catch (err) {
     // 파싱/잘라내기 실패 시 상세 로그 — 파일 경로와 에러 메시지 포함
@@ -88,6 +101,10 @@ export function loadRecentEpisodes(
   const formatted = recent.map(line => {
     try {
       const ep: Episode = JSON.parse(line);
+      if (typeof ep.ts !== 'number' || isNaN(ep.ts)) {
+        parseFailures++;
+        return null;
+      }
       const ago = formatTimeAgo(Date.now() - ep.ts);
       return `[${ago}] ${ep.summary} (ch:${ep.channelId})`;
     } catch {

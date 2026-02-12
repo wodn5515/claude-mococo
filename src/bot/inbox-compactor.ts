@@ -7,6 +7,11 @@ import { addMessage } from '../teams/context.js';
 import { newChain, sendAsTeam } from './client.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
+/** Check if a team is currently busy or queued (not available for new work). */
+function isOccupied(teamId: string): boolean {
+  return isBusy(teamId) || isQueued(teamId);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -109,7 +114,7 @@ async function leaderHeartbeat(
   try {
     const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
     if (!leaderTeam) return;
-    if (isBusy(leaderTeam.id) || isQueued(leaderTeam.id)) return;
+    if (isOccupied(leaderTeam.id)) return;
 
     const ws = config.workspacePath;
     const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
@@ -129,7 +134,13 @@ async function leaderHeartbeat(
       try {
         data = JSON.parse(raw);
       } catch (parseErr) {
-        console.warn(`[heartbeat] Corrupted improvement.json, skipping: ${parseErr}`);
+        console.warn(`[heartbeat] Corrupted improvement.json, recreating: ${parseErr}`);
+        const emptyData = JSON.stringify({ issues: [] }, null, 2);
+        const tmpPath = improvementPath + '.tmp';
+        try {
+          fs.writeFileSync(tmpPath, emptyData);
+          fs.renameSync(tmpPath, improvementPath);
+        } catch { try { fs.unlinkSync(tmpPath); } catch {} }
         data = { issues: [] };
       }
       const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
@@ -197,7 +208,7 @@ async function leaderHeartbeat(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
-    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(() => {});
+    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
     // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
@@ -248,7 +259,7 @@ async function followUpLoop(
 
     if (elapsedMin < 15) {
       // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
-      if (isBusy(team.id) || isQueued(team.id)) continue;
+      if (isOccupied(team.id)) continue;
 
       // 5-15 min: nudge the team to report
       console.log(`[follow-up] Nudging ${team.name} to report (${Math.round(elapsedMin)}min since dispatch, nudge ${currentNudges + 1}/${MAX_NUDGES_PER_RECORD})`);
@@ -261,7 +272,7 @@ async function followUpLoop(
       };
       const nudgeLeader = Object.values(config.teams).find(t => t.isLeader);
       addMessage(record.channelId, nudgeMsg);
-      if (nudgeLeader) await sendAsTeam(record.channelId, nudgeLeader, `📋 ${nudgeMsg.content}`).catch(() => {});
+      if (nudgeLeader) await sendAsTeam(record.channelId, nudgeLeader, `📋 ${nudgeMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
       triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
       nudgeCounts.set(record.id, currentNudges + 1);
       setFollowUpCooldown(team.id);
@@ -270,7 +281,7 @@ async function followUpLoop(
       // 15min+: notify leader (only once, then auto-resolve)
       const leader = Object.values(config.teams).find(t => t.isLeader);
       // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
-      if (leader && !isBusy(leader.id) && !isQueued(leader.id)) {
+      if (leader && !isOccupied(leader.id)) {
         console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min`);
         const alertMsg: ConversationMessage = {
           teamId: 'system',
@@ -282,7 +293,7 @@ async function followUpLoop(
         const alertChannelId = env.workChannelId || env.memberTrackingChannelId;
         if (alertChannelId) {
           addMessage(alertChannelId, alertMsg);
-          await sendAsTeam(alertChannelId, leader, `📋 ${alertMsg.content}`).catch(() => {});
+          await sendAsTeam(alertChannelId, leader, `📋 ${alertMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
           triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
         }
       }
@@ -317,7 +328,7 @@ async function dailyDigest(
     mentions: [leader.id],
   };
   addMessage(digestChannelId, digestMsg);
-  await sendAsTeam(digestChannelId, leader, `📋 ${digestMsg.content}`).catch(() => {});
+  await sendAsTeam(digestChannelId, leader, `📋 ${digestMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
   triggerInvocation(leader, digestMsg, digestChannelId, config, env, newChain());
 }
 
@@ -386,7 +397,7 @@ async function pendingTaskLoop(
 
   for (const team of Object.values(config.teams)) {
     if (team.isLeader) continue;
-    if (isBusy(team.id) || isQueued(team.id)) continue;
+    if (isOccupied(team.id)) continue;
     if (invoked >= MAX_INVOCATIONS_PER_CYCLE) break;
     if (isPendingTaskOnCooldown(team.id)) {
       console.log(`[pending-task] ${team.name} on cooldown, skipping`);
@@ -418,7 +429,7 @@ async function pendingTaskLoop(
     };
     const pendingLeader = Object.values(config.teams).find(t => t.isLeader);
     addMessage(task.channelId, triggerMsg);
-    if (pendingLeader) await sendAsTeam(task.channelId, pendingLeader, `📋 ${triggerMsg.content}`).catch(() => {});
+    if (pendingLeader) await sendAsTeam(task.channelId, pendingLeader, `📋 ${triggerMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
     triggerInvocation(team, triggerMsg, task.channelId, config, env, newChain());
     setPendingTaskCooldown(team.id);
     invoked++;
@@ -456,7 +467,7 @@ export function startInboxCompactor(
 
   // fs.watch for immediate inbox change detection — A안: bypass haiku triage
   const immediateLeaderInvoke = async () => {
-    if (isBusy(leaderTeam.id) || isQueued(leaderTeam.id)) {
+    if (isOccupied(leaderTeam.id)) {
       console.log('[inbox-compactor] Leader busy/queued, skipping immediate invoke');
       return;
     }
@@ -479,7 +490,7 @@ export function startInboxCompactor(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
-    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(() => {});
+    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
   };
 

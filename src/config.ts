@@ -22,9 +22,9 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
     raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
   } catch (err: unknown) {
     if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.error(`[config] teams.json not found at ${teamsJsonPath}`);
-      console.error('[config] Run "mococo init" first to create a workspace.');
-      process.exit(1);
+      throw new Error(
+        `[config] teams.json not found at ${teamsJsonPath}. Run "mococo init" first to create a workspace.`,
+      );
     }
     throw err;
   }
@@ -47,9 +47,16 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
         const resolvedEnv: Record<string, string> = {};
         if (server.env) {
           for (const [key, val] of Object.entries(server.env as Record<string, string>)) {
-            resolvedEnv[key] = val.startsWith('$')
-              ? (process.env[val.slice(1)] ?? '')
-              : val;
+            if (val.startsWith('$')) {
+              const envName = val.slice(1);
+              const envValue = process.env[envName];
+              if (envValue === undefined) {
+                console.warn(`[config] MCP server "${name}" for team "${id}": env var ${envName} is not set (key: ${key})`);
+              }
+              resolvedEnv[key] = envValue ?? '';
+            } else {
+              resolvedEnv[key] = val;
+            }
           }
         }
         mcpServers[name] = {

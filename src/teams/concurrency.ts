@@ -23,6 +23,12 @@ export function markFree(teamId: TeamId) {
 export function waitForFree(teamId: TeamId): Promise<void> {
   if (!isBusy(teamId)) return Promise.resolve();
   return new Promise((resolve) => {
+    // Re-check after Promise creation — markFree() may have run between
+    // the initial check and this point
+    if (!isBusy(teamId)) {
+      resolve();
+      return;
+    }
     if (!queues.has(teamId)) queues.set(teamId, []);
     queues.get(teamId)!.push(resolve);
   });

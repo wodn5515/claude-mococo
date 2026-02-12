@@ -24,7 +24,8 @@ function readCached(filePath: string): string {
         return cached.content;
       }
     } catch {
-      return cached.content; // stat 실패 시 기존 캐시 반환
+      fileCache.delete(filePath);
+      return '';
     }
   }
 
@@ -34,6 +35,8 @@ function readCached(filePath: string): string {
     fileCache.set(filePath, { content, cachedAt: now, size: stat.size, mtimeMs: stat.mtimeMs });
     return content;
   } catch {
+    // File deleted or unreadable — invalidate stale cache entry if present
+    fileCache.delete(filePath);
     return '';
   }
 }
@@ -48,11 +51,11 @@ function summarizeInbox(raw: string, teamId: string): string {
   const lines = raw.split('\n').filter(l => l.trim());
 
   // Parse into entries (each line is "[timestamp] sender: content")
-  let parseFailures = 0;
+  const failedLines: string[] = [];
   const entries = lines.map(line => {
     const match = line.match(/^\[([^\]]+)\]\s+([^:]+):\s*([\s\S]*)$/);
     if (!match) {
-      parseFailures++;
+      failedLines.push(line);
       return { ts: '', from: '', content: line, mentionsMe: false };
     }
     return {
@@ -62,8 +65,16 @@ function summarizeInbox(raw: string, teamId: string): string {
       mentionsMe: match[3].toLowerCase().includes(teamId),
     };
   });
-  if (parseFailures > 0) {
-    console.warn(`[summarizeInbox] ${teamId}: ${parseFailures}건의 inbox 라인 파싱 실패 (전체 ${lines.length}건 중)`);
+  if (failedLines.length > 0) {
+    const sample = failedLines.length <= 3
+      ? failedLines.map(l => l.slice(0, 80)).join('; ')
+      : failedLines.slice(0, 3).map(l => l.slice(0, 80)).join('; ') + '...';
+    const failRatio = failedLines.length / lines.length;
+    if (failRatio > 0.5) {
+      console.error(`[summarizeInbox] ${teamId}: ${failedLines.length}/${lines.length}건 파싱 실패 (${(failRatio * 100).toFixed(0)}% — 과반 이상) — ${sample}`);
+    } else {
+      console.warn(`[summarizeInbox] ${teamId}: ${failedLines.length}/${lines.length}건 파싱 실패 — ${sample}`);
+    }
   }
 
   // Prioritize mentions, fill remaining with most recent others
