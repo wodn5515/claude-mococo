@@ -168,9 +168,9 @@ async function leaderHeartbeat(
 
     console.log(`[heartbeat] Invoking leader: ${reason}`);
 
-    const channelId = env.workChannelId;
+    const channelId = env.workChannelId || env.memberTrackingChannelId;
     if (!channelId) {
-      console.warn('[heartbeat] No workChannelId configured, cannot invoke leader');
+      console.warn('[heartbeat] No workChannelId or memberTrackingChannelId configured, cannot invoke leader');
       return;
     }
 
@@ -257,9 +257,10 @@ async function followUpLoop(
           timestamp: new Date(),
           mentions: [leader.id],
         };
-        if (env.workChannelId) {
-          addMessage(env.workChannelId, alertMsg);
-          triggerInvocation(leader, alertMsg, env.workChannelId, config, env, newChain());
+        const alertChannelId = env.workChannelId || env.memberTrackingChannelId;
+        if (alertChannelId) {
+          addMessage(alertChannelId, alertMsg);
+          triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
         }
       }
       // Expire very old records (60min+)
@@ -283,7 +284,8 @@ async function dailyDigest(
 ): Promise<void> {
   const leader = Object.values(config.teams).find(t => t.isLeader);
   if (!leader) return;
-  if (!env.workChannelId) return;
+  const digestChannelId = env.workChannelId || env.memberTrackingChannelId;
+  if (!digestChannelId) return;
 
   const digestMsg: ConversationMessage = {
     teamId: 'system',
@@ -292,8 +294,8 @@ async function dailyDigest(
     timestamp: new Date(),
     mentions: [leader.id],
   };
-  addMessage(env.workChannelId, digestMsg);
-  triggerInvocation(leader, digestMsg, env.workChannelId, config, env, newChain());
+  addMessage(digestChannelId, digestMsg);
+  triggerInvocation(leader, digestMsg, digestChannelId, config, env, newChain());
 }
 
 // ---------------------------------------------------------------------------

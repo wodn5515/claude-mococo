@@ -454,7 +454,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     };
     addMessage(channelId, triggerMsg);
     handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
-  }, env.workChannelId);
+  }, env.workChannelId || env.memberTrackingChannelId);
 }
 
 // ---------------------------------------------------------------------------
