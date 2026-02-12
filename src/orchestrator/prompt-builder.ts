@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { formatConversation } from '../teams/context.js';
+import { loadRecentEpisodes } from '../bot/episode-writer.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
 const MAX_INBOX_ENTRIES = 20;
@@ -149,41 +150,70 @@ export async function buildTeamPrompt(
     }
   }
 
+  const recentEpisodes = loadRecentEpisodes(team.id, ws);
+  const currentTime = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const chId = invocation.channelId;
+
   return `${template}
 ${sharedRules ? `\n${sharedRules}\n` : ''}
+## Current Context
+현재 채널: ${chId}
+현재 시각: ${currentTime}
+
 ## Long-term Memory
 Important knowledge that persists permanently. Only update when you have something worth keeping forever.
 Use these sections to organize:
-\`\`\`
+
 ### 사용자 & 멤버
-(선호도, 역할, 관계, 성향)
+예시:
+- 회장님: 한국어 선호, 코드 품질 중시, 매주 월요일 주간보고
+- @김개발: 백엔드 전문, TypeScript 주력
+
 ### 프로젝트 & 구조
-(레포, 기술 스택, 아키텍처 결정)
+예시:
+- mococo-api: Express + TypeScript, repos/mococo-api
+- 배포: main → staging 자동, production 수동
+
 ### 정책 & 규칙
-(팀 내 합의, 업무 프로세스, 반복 일정)
+예시:
+- PR 머지는 회장님만 가능
+- 핫픽스는 autonomous 결정 가능, 기능 추가는 propose
+
 ### 팀 역량
-(각 팀/멤버의 능력, 담당 업무)
-\`\`\`
+예시:
+- BE코코: API 설계, DB 마이그레이션, 성능 최적화
+- FE코코: React, 배포 파이프라인, UI/UX
+
 ${longTermMemory ? `\n${longTermMemory}\n` : '\n(empty)\n'}
 ## Short-term Memory
-Working context for current tasks. Update every response:
-- Add new relevant info from your response
-- Promote important items to long-term memory
-- Delete outdated or useless entries
-- Keep it lean — only what's needed for your next invocation
+Working context for current tasks. Update every response.
 Use these sections to organize:
-\`\`\`
+
 ### 진행중 작업
-(현재 태스크, 담당자, 블로커)
-### 최근 결정 & 약속
-(최근 대화에서 나온 합의, 약속)
+(현재 태스크, 담당자, 블로커 — 반드시 #ch:숫자ID 포함)
+예시:
+- FE 배포 스크립트 작성 중 #ch:${chId}
+- BE코코에게 API 연동 위임, 결과 대기 #ch:${chId}
+
 ### 대기 항목
-(미완료 작업 — 반드시 #ch:channelId 포함. 예: - API 연동 마무리 #ch:123456789)
+(미완료 작업 — 반드시 #ch:숫자ID 포함. 태그: [BLOCKED], [SCHEDULED:YYYY-MM-DD], [READY])
+예시:
+- DB 마이그레이션 실행 #ch:1234567890123456
+- Redis 설정 [BLOCKED] — BE코코 완료 대기 #ch:1234567890123456
+- 주간보고 작성 [SCHEDULED:2026-02-17] #ch:9876543210123456
+
 ### 캐시된 외부 데이터
-(최근 API 조회 결과 + 조회 시각)
-\`\`\`
-**⚠️ 진행중 작업 및 대기 항목에는 반드시 #ch:channelId를 포함하라.** 이 정보가 있어야 자동 실행 루프가 어느 채널에서 작업을 이어할지 알 수 있다.
+(API 조회 결과 + 조회 시각. 24시간 이상 경과 시 재조회 필요.)
+예시:
+- [2/12 10:30] 캘린더: 오늘 일정 3건 (팀미팅 14:00, 코드리뷰 16:00)
+- [2/12 09:00] GitHub PR: #142 리뷰 대기, #140 머지 완료
+
+⚠️ #ch: 뒤에는 반드시 실제 Discord 채널 ID(숫자)를 적어라. 현재 채널 ID: ${chId}
 ${shortTermMemory ? `\n${shortTermMemory}\n` : '\n(empty)\n'}
+## Recent Activity (자동 생성 — 수정 불필요)
+최근 활동 요약. 이전 호출에서 무엇을 했는지 파악하여 맥락을 이어가라.
+${recentEpisodes || '(no recent activity)'}
+
 ${team.isLeader ? `## Inbox (messages since your last response)
 ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
 **You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory AND inbox above, incorporate new information, and remove anything outdated. The inbox is cleared after you respond, so anything you don't save to memory will be lost.` : `**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory, incorporate new information, and remove anything outdated.`}

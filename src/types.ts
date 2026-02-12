@@ -58,6 +58,16 @@ export interface TeamInvocation {
   trigger: 'human_message' | 'team_mention' | 'direct_command';
   message: ConversationMessage;
   conversation: ConversationMessage[];
+  channelId: string;
+}
+
+export interface Episode {
+  ts: number;           // Unix timestamp (ms)
+  teamId: string;
+  channelId: string;
+  trigger: string;      // 'human_message' | 'team_mention' | 'system'
+  summary: string;      // Haiku 생성 1-2줄 요약 (Korean, max 200자)
+  mentions: string[];   // 출력에서 언급된 팀 ID들
 }
 
 export interface EnvConfig {
