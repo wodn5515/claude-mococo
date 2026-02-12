@@ -11,6 +11,7 @@ type InvocationTrigger = (team: TeamConfig, channelId: string, systemMessage: st
 const SCANNABLE_EXTENSIONS = new Set(['.ts', '.js', '.py', '.json', '.md']);
 const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'dist', 'build']);
 const EXCLUDED_PATTERNS = [/\.lock$/];
+const EXCLUDED_REPOS = new Set(['atom.io']);
 
 // ---------------------------------------------------------------------------
 // Git helper -- run git command via spawn
@@ -18,7 +19,15 @@ const EXCLUDED_PATTERNS = [/\.lock$/];
 
 const MAX_GIT_OUTPUT_BYTES = 1024 * 1024; // 1MB limit
 
-function runGit(args: string[], cwd: string): Promise<string> {
+interface GitResult {
+  output: string;
+  truncated: boolean;
+  stderr: string;
+}
+
+const MAX_STDERR_BYTES = 4096;
+
+function runGit(args: string[], cwd: string): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
 
@@ -32,19 +41,27 @@ function runGit(args: string[], cwd: string): Promise<string> {
       if (stdout.length > MAX_GIT_OUTPUT_BYTES) {
         stdout = stdout.slice(0, MAX_GIT_OUTPUT_BYTES);
         truncated = true;
-        // git log 출력이 제한을 초과하여 잘림 — 일부 커밋 데이터 누락 가능
-        console.warn(`[improvement-scanner] git output truncated at ${MAX_GIT_OUTPUT_BYTES} bytes (cmd: git ${args.join(' ')}). 일부 데이터가 누락될 수 있음`);
+        console.warn(`[improvement-scanner] git output truncated at ${MAX_GIT_OUTPUT_BYTES} bytes (cmd: git ${args.join(' ')}). Killing child process`);
+        child.kill('SIGTERM');
       }
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      if (stderr.length < MAX_STDERR_BYTES) {
+        stderr += chunk.toString();
+        if (stderr.length > MAX_STDERR_BYTES) {
+          stderr = stderr.slice(0, MAX_STDERR_BYTES);
+        }
+      }
     });
 
     child.on('error', (err) => reject(err));
     child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
+      if (truncated) {
+        if (stderr) console.warn(`[improvement-scanner] git stderr: ${stderr.slice(0, 200)}`);
+        resolve({ output: stdout.trim(), truncated, stderr });
+      } else if (code === 0) {
+        resolve({ output: stdout.trim(), truncated, stderr });
       } else {
         reject(new Error(`git exited with code ${code}: ${stderr.slice(0, 300)}`));
       }
@@ -77,14 +94,28 @@ function isScannableFile(filePath: string): boolean {
 async function scanRepoFiles(repoPath: string): Promise<FileEntry[]> {
   // Get files changed in recent N commits with timestamps
   // git log -N --format="%at" --name-only --diff-filter=ACMR
-  let output: string;
-  try {
-    output = await runGit(
-      ['log', `-${RECENT_COMMITS_COUNT}`, '--format=%at', '--name-only', '--diff-filter=ACMR'],
-      repoPath,
-    );
-  } catch {
-    return [];
+  // truncation 발생 시 더 적은 커밋 수로 재시도
+  let output = '';
+  let commitCount = RECENT_COMMITS_COUNT;
+  const MIN_COMMITS = 5;
+
+  while (commitCount >= MIN_COMMITS) {
+    try {
+      const result = await runGit(
+        ['log', `-${commitCount}`, '--format=%at', '--name-only', '--diff-filter=ACMR'],
+        repoPath,
+      );
+      if (result.truncated && commitCount > MIN_COMMITS) {
+        const reduced = Math.max(MIN_COMMITS, Math.floor(commitCount / 2));
+        console.warn(`[improvement-scanner] Output truncated with ${commitCount} commits, retrying with ${reduced}`);
+        commitCount = reduced;
+        continue;
+      }
+      output = result.output;
+      break;
+    } catch {
+      return [];
+    }
   }
 
   if (!output) return [];
@@ -196,6 +227,7 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
   let repoDirs: string[];
   try {
     repoDirs = fs.readdirSync(reposDir).filter(name => {
+      if (EXCLUDED_REPOS.has(name)) return false;
       const fullPath = path.join(reposDir, name);
       try {
         return fs.statSync(fullPath).isDirectory();
