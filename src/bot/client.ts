@@ -91,10 +91,7 @@ export function newChain(): ChainContext {
  *
  * Checks whether the tail of the path repeats a fixed-length cycle:
  *   - Period 2 (A↔B):   requires 3 consecutive repeats (6 elements)
- *   - Period 3 (A→B→C): requires 2 consecutive repeats (6 elements)
- *
- * General rule — for period N, requires `ceil(6/N)` full repeats so that
- * the total checked length is always <= 6 (the recentPath cap).
+ *   - Period 3+ (A→B→C→…): requires 2 consecutive repeats
  *
  * Examples:
  *   [A,B,A,B,A,B]       → period 2, 3 reps → true
@@ -109,8 +106,9 @@ function detectLoop(chain: ChainContext, nextTeamId: string): boolean {
   // Try cycle periods from 2 up to half the trail length
   const maxPeriod = Math.floor(trail.length / 2);
   for (let period = 2; period <= maxPeriod; period++) {
-    // Require enough repeats so checked length >= 6 (stricter for short cycles)
-    const minRepeats = Math.max(2, Math.ceil(6 / period));
+    // Period 2: strict — require 3 reps (6 elements) to avoid false positives
+    // Period 3+: 2 reps is sufficient evidence of a cycle
+    const minRepeats = period === 2 ? 3 : 2;
     const needed = period * minRepeats;
     if (trail.length < needed) continue;
 
@@ -689,7 +687,8 @@ function dispatchMentionedTeams(
 
     // Loop detection
     if (detectLoop(chain, target.id)) {
-      console.log(`[dispatch] Loop detected: ${chain.recentPath.slice(-5).join('→')}→${target.id}, stopping`);
+      const trail = [...chain.recentPath, target.id];
+      console.log(`[dispatch] Loop detected in chain ${trail.slice(-6).join('→')}, stopping dispatch to ${target.name}`);
       continue;
     }
 
