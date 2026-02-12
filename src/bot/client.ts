@@ -290,11 +290,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             );
           }
 
-          const restartCmd = new SlashCommandBuilder()
-            .setName('restart')
-            .setDescription('봇 프로세스 재시작 (코드 변경 적용)');
-
-          const commands = [resetCmd.toJSON(), restartCmd.toJSON()];
+          const commands = [resetCmd.toJSON()];
 
           const rest = new REST().setToken(team.discordToken);
           const guildId = client.guilds.cache.first()?.id;
@@ -349,24 +345,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         const cleared = resetTeamMemory(team.id, config.workspacePath);
         await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
       }
-    });
-
-    // Handle /restart slash command interaction
-    client.on('interactionCreate', async (interaction) => {
-      if (!interaction.isChatInputCommand()) return;
-      if (interaction.commandName !== 'restart') return;
-
-      // Permission check: humanDiscordId only
-      if (config.humanDiscordId && interaction.user.id !== config.humanDiscordId) {
-        await interaction.reply({ content: '재시작은 회장님만 실행할 수 있습니다.', ephemeral: true });
-        return;
-      }
-
-      await interaction.reply('봇을 재시작합니다... 잠시 후 자동으로 복귀합니다.');
-
-      // Give Discord time to send the reply, then exit.
-      // launchd (KeepAlive: true) will restart the process automatically.
-      setTimeout(() => process.exit(0), 1500);
     });
 
     // Member join/leave tracking (leader only)
@@ -427,7 +405,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         }
 
         // Leader reads every message — append to inbox for memory processing
-        await appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId).catch(() => {});
+        // Skip inbox when human directly mentions non-leader bots (direct command, no leader relay needed)
+        const isHumanDirectToNonLeader = msg.author.id === config.humanDiscordId && mentionsOtherBot;
+        if (!isHumanDirectToNonLeader) {
+          await appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId).catch(() => {});
+        }
 
         if (mentionsOtherBot) return;
 
