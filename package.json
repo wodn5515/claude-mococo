@@ -14,7 +14,11 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop claude-mococo",
+    "pm2:restart": "pm2 restart claude-mococo",
+    "pm2:logs": "pm2 logs claude-mococo"
   },
   "dependencies": {
     "discord.js": "^14.16.0",

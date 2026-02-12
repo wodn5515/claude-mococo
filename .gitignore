@@ -7,3 +7,4 @@ repos/
 prompts/
 teams.json
 *.log
+logs/
