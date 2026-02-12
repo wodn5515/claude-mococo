@@ -22,18 +22,18 @@ export async function runDev(): Promise<void> {
   console.log('Run "mococo restart" to rebuild and restart.');
   console.log('Press Ctrl+C to stop.\n');
 
+  const execCmd = `npm run build --prefix "${projectRoot}" && node "${path.join(projectRoot, 'dist', 'cli', 'index.js')}" start`;
   const child = spawn(
     'npx',
     [
       'nodemon',
       '--watch', triggerFile,
-      '--ext', '*',
-      '--exec', `npm run build --prefix "${projectRoot}" && node "${path.join(projectRoot, 'dist', 'cli', 'index.js')}" start`,
+      '--ext', 'hooks',
+      '--exec', execCmd,
     ],
     {
       cwd: ws,
       stdio: 'inherit',
-      shell: true,
     },
   );
 
