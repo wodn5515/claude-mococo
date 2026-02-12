@@ -31,7 +31,13 @@ export const teamClients = new Map<string, Client>();
 // Inbox helpers — append chat to a team's inbox file for memory processing
 // ---------------------------------------------------------------------------
 
-const inboxWriteQueue: Array<() => Promise<void>> = [];
+// cancelled 플래그로 timeout 후 task 실행을 방지하여 race condition 해결
+interface InboxTask {
+  fn: () => Promise<void>;
+  cancelled: boolean;
+}
+
+const inboxWriteQueue: InboxTask[] = [];
 let isProcessingInboxQueue = false;
 
 async function processInboxWriteQueue() {
@@ -41,8 +47,9 @@ async function processInboxWriteQueue() {
   try {
     while (inboxWriteQueue.length > 0) {
       const task = inboxWriteQueue.shift()!;
+      if (task.cancelled) continue; // timeout으로 취소된 task 스킵
       try {
-        await task();
+        await task.fn();
       } catch (err) {
         console.error('[inbox-queue] Write failed:', err);
       }
@@ -54,24 +61,30 @@ async function processInboxWriteQueue() {
 
 export function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
   return new Promise<void>((resolve, reject) => {
+    const task: InboxTask = {
+      fn: async () => {
+        try {
+          const dir = path.resolve(workspacePath, '.mococo/inbox');
+          fs.mkdirSync(dir, { recursive: true });
+          const file = path.resolve(dir, `${teamId}.md`);
+          const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+          await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
+          clearTimeout(timeout);
+          resolve();
+        } catch (err) {
+          clearTimeout(timeout);
+          reject(err);
+        }
+      },
+      cancelled: false,
+    };
+
     const timeout = setTimeout(() => {
+      task.cancelled = true;
       reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
     }, 30_000);
 
-    inboxWriteQueue.push(async () => {
-      try {
-        const dir = path.resolve(workspacePath, '.mococo/inbox');
-        fs.mkdirSync(dir, { recursive: true });
-        const file = path.resolve(dir, `${teamId}.md`);
-        const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-        await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${content}\n`);
-        clearTimeout(timeout);
-        resolve();
-      } catch (err) {
-        clearTimeout(timeout);
-        reject(err);
-      }
-    });
+    inboxWriteQueue.push(task);
     processInboxWriteQueue();
   });
 }
@@ -197,23 +210,24 @@ function updateMemberTracking(
 
 const registry = new ResourceRegistry();
 
-export async function sendAsTeam(channelId: string, team: TeamConfig, content: string) {
+export async function sendAsTeam(channelId: string, team: TeamConfig, content: string): Promise<boolean> {
   const client = teamClients.get(team.id);
   if (!client) {
     console.warn(`[sendAsTeam] No client for team ${team.name} (${team.id})`);
-    return;
+    return false;
   }
 
   const channel = client.channels.cache.get(channelId) as TextChannel | undefined;
   if (!channel) {
     console.warn(`[sendAsTeam] Channel ${channelId} not found for team ${team.name}`);
-    return;
+    return false;
   }
 
   const chunks = splitMessage(content, 1900);
   for (const chunk of chunks) {
     await channel.send(chunk);
   }
+  return true;
 }
 
 function splitMessage(text: string, maxLen: number): string[] {

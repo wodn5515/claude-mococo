@@ -58,7 +58,9 @@ Output ONLY the summary text, nothing else.`;
       fs.writeFileSync(filePath, trimmed);
     }
   } catch (err) {
-    console.warn(`[episode] Truncation failed for ${teamId}: ${err}`);
+    // 파싱/잘라내기 실패 시 상세 로그 — 파일 경로와 에러 메시지 포함
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[episode] Truncation failed for ${teamId} (${filePath}): ${errMsg}`);
   }
 }
 
@@ -94,7 +96,8 @@ export function loadRecentEpisodes(
     }
   }).filter(Boolean);
   if (parseFailures > 0) {
-    console.warn(`[episode] ${parseFailures} malformed line(s) skipped in ${teamId} episodes`);
+    // 손상된 라인 수와 전체 라인 수를 함께 출력하여 심각도 파악 용이
+    console.warn(`[episode] ${teamId}: ${parseFailures}건의 손상된 라인 스킵됨 (전체 ${recent.length}건 중, 파일: ${filePath})`);
   }
 
   return formatted.join('\n');

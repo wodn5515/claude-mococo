@@ -247,6 +247,9 @@ async function followUpLoop(
     }
 
     if (elapsedMin < 15) {
+      // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
+      if (isBusy(team.id) || isQueued(team.id)) continue;
+
       // 5-15 min: nudge the team to report
       console.log(`[follow-up] Nudging ${team.name} to report (${Math.round(elapsedMin)}min since dispatch, nudge ${currentNudges + 1}/${MAX_NUDGES_PER_RECORD})`);
       const nudgeMsg: ConversationMessage = {
@@ -266,6 +269,7 @@ async function followUpLoop(
     } else {
       // 15min+: notify leader (only once, then auto-resolve)
       const leader = Object.values(config.teams).find(t => t.isLeader);
+      // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
       if (leader && !isBusy(leader.id) && !isQueued(leader.id)) {
         console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min`);
         const alertMsg: ConversationMessage = {

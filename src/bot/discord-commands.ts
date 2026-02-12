@@ -95,7 +95,11 @@ interface ParsedCommand {
   params: Record<string, string>;
 }
 
-/** Mask content inside triple-backtick fences so we don't match commands in code blocks */
+/**
+ * 코드 블록 내 명령어 매칭 방지를 위해 트리플 백틱 펜스 내용을 마스킹.
+ * non-greedy 매칭([\s\S]*?)으로 중첩/연속 코드 블록도 올바르게 처리됨.
+ * 참고: 인덴트 기반 코드 블록(4 spaces)은 Discord에서 거의 사용되지 않으므로 미처리.
+ */
 function maskCodeFences(text: string): string {
   return text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
 }
@@ -162,6 +166,10 @@ function parseParams(paramStr: string): Record<string, string> {
   let m: RegExpExecArray | null;
   while ((m = re.exec(paramStr)) !== null) {
     let value = m[2] ?? m[3];
+    // 큰따옴표 내 이스케이프 시퀀스 처리: \" → ", \\ → \
+    if (m[2] !== undefined) {
+      value = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    }
     // Truncate overly long values
     if (value.length > MAX_PARAM_VALUE_LENGTH) {
       value = value.slice(0, MAX_PARAM_VALUE_LENGTH);
@@ -184,7 +192,7 @@ export interface CommandContext {
   registry: ResourceRegistry;
   channelId: string;
   teamClients: Map<string, Client>;
-  sendAsTeam: (channelId: string, team: TeamConfig, content: string) => Promise<void>;
+  sendAsTeam: (channelId: string, team: TeamConfig, content: string) => Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------

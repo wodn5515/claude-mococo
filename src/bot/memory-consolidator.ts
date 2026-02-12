@@ -125,6 +125,7 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
   const now = Date.now();
   const old: Episode[] = [];
   const recent: string[] = [];
+  let malformedCount = 0;
 
   for (const line of lines) {
     try {
@@ -135,8 +136,13 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
         recent.push(line);
       }
     } catch {
-      console.warn(`[memory-consolidator] Skipping malformed episode line: ${line.slice(0, 100)}`);
+      malformedCount++;
     }
+  }
+
+  // 손상된 라인이 있으면 요약 로그 출력
+  if (malformedCount > 0) {
+    console.warn(`[memory-consolidator] ${teamName}: ${malformedCount}건의 손상된 에피소드 라인 스킵됨 (전체 ${lines.length}건 중)`);
   }
 
   if (old.length < 2) return; // not enough old episodes to compact

@@ -8,17 +8,30 @@ const MAX_INBOX_ENTRIES = 20;
 const MAX_ENTRY_CHARS = 200;
 
 // File cache for rarely-changing files (shared rules, member list)
-const fileCache = new Map<string, { content: string; mtime: number }>();
+// 파일 캐시: mtime + size 모두 비교하여 변경 감지 정확도 향상
+const fileCache = new Map<string, { content: string; cachedAt: number; size: number; mtimeMs: number }>();
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
 function readCached(filePath: string): string {
   const now = Date.now();
   const cached = fileCache.get(filePath);
-  if (cached && now - cached.mtime < CACHE_TTL_MS) return cached.content;
+
+  if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+    // TTL 내라도 파일 크기/수정 시간이 변경되었으면 캐시 무효화
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
+        return cached.content;
+      }
+    } catch {
+      return cached.content; // stat 실패 시 기존 캐시 반환
+    }
+  }
 
   try {
     const content = fs.readFileSync(filePath, 'utf-8').trim();
-    fileCache.set(filePath, { content, mtime: now });
+    const stat = fs.statSync(filePath);
+    fileCache.set(filePath, { content, cachedAt: now, size: stat.size, mtimeMs: stat.mtimeMs });
     return content;
   } catch {
     return '';
@@ -35,9 +48,13 @@ function summarizeInbox(raw: string, teamId: string): string {
   const lines = raw.split('\n').filter(l => l.trim());
 
   // Parse into entries (each line is "[timestamp] sender: content")
+  let parseFailures = 0;
   const entries = lines.map(line => {
     const match = line.match(/^\[([^\]]+)\]\s+([^:]+):\s*([\s\S]*)$/);
-    if (!match) return { ts: '', from: '', content: line, mentionsMe: false };
+    if (!match) {
+      parseFailures++;
+      return { ts: '', from: '', content: line, mentionsMe: false };
+    }
     return {
       ts: match[1],
       from: match[2],
@@ -45,6 +62,9 @@ function summarizeInbox(raw: string, teamId: string): string {
       mentionsMe: match[3].toLowerCase().includes(teamId),
     };
   });
+  if (parseFailures > 0) {
+    console.warn(`[summarizeInbox] ${teamId}: ${parseFailures}건의 inbox 라인 파싱 실패 (전체 ${lines.length}건 중)`);
+  }
 
   // Prioritize mentions, fill remaining with most recent others
   const mentioning = entries.filter(e => e.mentionsMe).slice(-MAX_INBOX_ENTRIES);

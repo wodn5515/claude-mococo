@@ -2,7 +2,10 @@ import crypto from 'node:crypto';
 import type { DispatchRecord } from '../types.js';
 
 const MAX_RECORDS = 200;
+/** 해결된 레코드 만료 시간 (기본 1시간) */
 const EXPIRE_MS = 60 * 60 * 1000; // 1 hour
+/** 미해결 레코드 강제 만료 시간 — EXPIRE_MS의 배수로 설정 (기본 3배 = 3시간) */
+const HARD_CUTOFF_MULTIPLIER = 3;
 
 class DispatchLedger {
   private records: DispatchRecord[] = [];
@@ -71,7 +74,7 @@ class DispatchLedger {
    */
   private cleanup(): void {
     const cutoff = Date.now() - EXPIRE_MS;
-    const hardCutoff = Date.now() - EXPIRE_MS * 3; // 3 hours: force expire even unresolved
+    const hardCutoff = Date.now() - EXPIRE_MS * HARD_CUTOFF_MULTIPLIER;
     this.records = this.records
       .filter(r => {
         if (r.dispatchedAt < hardCutoff) return false; // force expire old unresolved

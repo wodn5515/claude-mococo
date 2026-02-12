@@ -32,7 +32,8 @@ function runGit(args: string[], cwd: string): Promise<string> {
       if (stdout.length > MAX_GIT_OUTPUT_BYTES) {
         stdout = stdout.slice(0, MAX_GIT_OUTPUT_BYTES);
         truncated = true;
-        console.warn(`[improvement-scanner] git output truncated at ${MAX_GIT_OUTPUT_BYTES} bytes`);
+        // git log 출력이 제한을 초과하여 잘림 — 일부 커밋 데이터 누락 가능
+        console.warn(`[improvement-scanner] git output truncated at ${MAX_GIT_OUTPUT_BYTES} bytes (cmd: git ${args.join(' ')}). 일부 데이터가 누락될 수 있음`);
       }
     });
 
