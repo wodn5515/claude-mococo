@@ -25,6 +25,11 @@ async function main(): Promise<void> {
       await runDev();
       break;
     }
+    case 'restart': {
+      const { runRestart } = await import('./commands/restart.js');
+      await runRestart();
+      break;
+    }
     case 'list':
     case 'ls': {
       const { runList } = await import('./commands/list.js');
@@ -50,7 +55,8 @@ Usage:
   mococo add               Add an assistant (interactive)
   mococo edit <id>         Edit an assistant's settings
   mococo start             Start all assistants
-  mococo dev               Start in dev mode (auto-rebuild on changes)
+  mococo dev               Start in dev mode (rebuild on trigger)
+  mococo restart           Trigger rebuild + restart (use with dev)
   mococo list              List configured assistants
   mococo remove <id>       Remove an assistant
 

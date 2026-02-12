@@ -8,3 +8,4 @@ prompts/
 teams.json
 *.log
 logs/
+.restart-trigger
