@@ -285,7 +285,17 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
     })),
   };
 
-  fs.writeFileSync(outputPath, JSON.stringify(result, null, 2));
+  // Atomic write: write to temp file then rename to prevent data corruption
+  const tmpPath = `${outputPath}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(result, null, 2));
+    fs.renameSync(tmpPath, outputPath);
+  } catch (err) {
+    console.error(`[improvement-scanner] Failed to write improvement.json: ${err}`);
+    // Clean up temp file if rename failed
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    return;
+  }
   console.log(`[improvement-scanner] Scan complete: ${allIssues.length} issue(s) found across ${repoDirs.length} repo(s)`);
 }
 
@@ -339,6 +349,7 @@ function parseHaikuOutput(output: string): IssueItem[] {
 // notifyLeaderOfNewIssues -- event-driven leader notification after scan
 // ---------------------------------------------------------------------------
 
+const MAX_TRACKED_ISSUE_KEYS = 500;
 let previousIssueKeys = new Set<string>();
 
 function issueKey(issue: { file: string; repo: string; type: string; description: string }): string {
@@ -378,8 +389,13 @@ function notifyLeaderOfNewIssues(
       }
     }
 
-    // Update tracked keys
-    previousIssueKeys = currentKeys;
+    // Update tracked keys (cap size to prevent memory growth)
+    if (currentKeys.size > MAX_TRACKED_ISSUE_KEYS) {
+      const keysArray = [...currentKeys];
+      previousIssueKeys = new Set(keysArray.slice(keysArray.length - MAX_TRACKED_ISSUE_KEYS));
+    } else {
+      previousIssueKeys = currentKeys;
+    }
 
     if (newIssues.length === 0) {
       console.log('[improvement-monitor] No new issues detected');
@@ -399,8 +415,12 @@ function notifyLeaderOfNewIssues(
       console.log(`[improvement-monitor] ${systemMessage}`);
       triggerInvocation(leaderTeam, improvementChannelId, systemMessage);
     }
-  } catch {
-    // File doesn't exist or is malformed; silently continue
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // Only log if file exists but is malformed (not ENOENT)
+    if (!errMsg.includes('ENOENT')) {
+      console.warn(`[improvement-monitor] Error reading improvement.json: ${errMsg}`);
+    }
   }
 }
 
@@ -429,22 +449,37 @@ export function startImprovementScanner(
     // No existing file, start clean
   }
 
+  // Guard against overlapping scans
+  let scanRunning = false;
+
   // Scan → notify leader (event-driven: notify runs immediately after scan completes)
   async function runScanAndNotify(): Promise<void> {
-    await improvementLoop(config);
-    notifyLeaderOfNewIssues(config, triggerInvocation, improvementChannelId);
+    if (scanRunning) {
+      console.warn('[improvement-scanner] Previous scan still running, skipping');
+      return;
+    }
+    scanRunning = true;
+    try {
+      await improvementLoop(config);
+      notifyLeaderOfNewIssues(config, triggerInvocation, improvementChannelId);
+    } finally {
+      scanRunning = false;
+    }
   }
 
-  // Run first scan after 2 minutes (let system settle)
-  setTimeout(() => {
-    runScanAndNotify().catch(err => {
-      console.error(`[improvement-scanner] Unhandled error: ${err}`);
-    });
-
-    setInterval(() => {
-      runScanAndNotify().catch(err => {
-        console.error(`[improvement-scanner] Unhandled error: ${err}`);
-      });
+  // Recursive setTimeout instead of setInterval to prevent overlapping
+  function scheduleNextScan(): void {
+    setTimeout(() => {
+      runScanAndNotify()
+        .catch(err => console.error(`[improvement-scanner] Unhandled error: ${err}`))
+        .finally(() => scheduleNextScan());
     }, SCAN_INTERVAL_MS);
+  }
+
+  // Run first scan after 2 minutes (let system settle), then schedule recurring
+  setTimeout(() => {
+    runScanAndNotify()
+      .catch(err => console.error(`[improvement-scanner] Unhandled error: ${err}`))
+      .finally(() => scheduleNextScan());
   }, 2 * 60_000);
 }
