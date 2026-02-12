@@ -122,7 +122,8 @@ async function leaderHeartbeat(
 
     let improvementReport: string | null = null;
     try {
-      const raw = fs.readFileSync(path.resolve(ws, '.mococo/inbox/improvement.json'), 'utf-8');
+      const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+      const raw = fs.readFileSync(improvementPath, 'utf-8');
       const data = JSON.parse(raw);
       const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
       const high = issues.filter(i => i.severity === 'high');
@@ -149,7 +150,14 @@ async function leaderHeartbeat(
         }
         improvementReport = lines.join('\n');
       }
-    } catch {}
+    } catch (err: unknown) {
+      // ENOENT is expected — improvement.json may not exist yet
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // silent: file does not exist yet, normal scenario
+      } else {
+        console.warn(`[heartbeat] Failed to parse improvement.json: ${err}`);
+      }
+    }
 
     // Nothing to evaluate
     if (!inbox && unresolved.length === 0 && !improvementReport) return;

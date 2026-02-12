@@ -153,7 +153,9 @@ function parseCommands(output: string): ParsedCommand[] {
 
 function parseParams(paramStr: string): Record<string, string> {
   const params: Record<string, string> = {};
-  const re = /(\S+)=(?:"([^"]*)"|(\S+))/g;
+  // key: 영문자/언더스코어 시작, 이후 영문자/숫자/언더스코어/하이픈만 허용
+  // value(따옴표 없음): 안전한 문자만 허용 (영숫자, 점, 슬래시, 콜론, @, #, 콤마, +, -)
+  const re = /([a-zA-Z_][\w-]*)=(?:"([^"]*)"|([\w./:@#,+-]+))/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(paramStr)) !== null) {
     params[m[1]] = m[2] ?? m[3];

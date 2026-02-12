@@ -101,7 +101,12 @@ export function newChain(): ChainContext {
  */
 function detectLoop(chain: ChainContext, nextTeamId: string): boolean {
   const trail = [...chain.recentPath, nextTeamId];
-  if (trail.length < 4) return false;
+
+  // Minimum detectable cycle requires 6 elements:
+  //   - period 2 × 3 reps = 6  (e.g. [A,B,A,B,A,B])
+  //   - period 3 × 2 reps = 6  (e.g. [A,B,C,A,B,C])
+  // Lengths below 6 can never satisfy any cycle check, so bail out early.
+  if (trail.length < 6) return false;
 
   // Try cycle periods from 2 up to half the trail length
   const maxPeriod = Math.floor(trail.length / 2);
