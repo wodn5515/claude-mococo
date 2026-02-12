@@ -329,7 +329,7 @@ export function startInboxCompactor(
   env: EnvConfig,
   triggerInvocation: InvocationHandler,
 ): void {
-  console.log('[inbox-compactor] Started: heartbeat(10m) + fs.watch + follow-up(2m) + pending(60s) + digest(24h)');
+  console.log('[inbox-compactor] Started: fs.watch(immediate) + heartbeat(10m/fallback) + follow-up(2m) + pending(60s) + digest(24h)');
 
   const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
   if (!leaderTeam) {
@@ -349,17 +349,43 @@ export function startInboxCompactor(
     });
   };
 
-  // fs.watch for immediate inbox change detection
+  // fs.watch for immediate inbox change detection — A안: bypass haiku triage
+  const immediateLeaderInvoke = () => {
+    if (isBusy(leaderTeam.id) || isQueued(leaderTeam.id)) {
+      console.log('[inbox-compactor] Leader busy/queued, skipping immediate invoke');
+      return;
+    }
+
+    const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
+    let inbox = '';
+    try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
+    if (!inbox) return;
+
+    console.log('[inbox-compactor] Inbox changed → immediate leader invoke (no triage)');
+
+    const channelId = env.workChannelId;
+    if (!channelId) return;
+
+    const systemMsg: ConversationMessage = {
+      teamId: 'system',
+      teamName: 'System',
+      content: `[자율 판단] inbox 변경 감지 — 즉시 확인`,
+      timestamp: new Date(),
+      mentions: [leaderTeam.id],
+    };
+    addMessage(channelId, systemMsg);
+    triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
+  };
+
   try {
     fs.watch(inboxDir, (eventType, filename) => {
       if (filename !== `${leaderTeam.id}.md`) return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        console.log('[inbox-compactor] Inbox changed, executing heartbeat');
-        executeHeartbeat();
+        immediateLeaderInvoke();
       }, DEBOUNCE_MS);
     });
-    console.log(`[inbox-compactor] Watching ${inboxDir} for changes`);
+    console.log(`[inbox-compactor] Watching ${inboxDir} for changes (A안: immediate dispatch)`);
   } catch (err) {
     console.error(`[inbox-compactor] Failed to watch inbox directory: ${err}`);
   }
