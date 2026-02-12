@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { Client, GatewayIntentBits, type GuildMember, type TextChannel, type Message } from 'discord.js';
+import {
+  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
+  type GuildMember, type TextChannel, type Message, type ChatInputCommandInteraction,
+} from 'discord.js';
 import { routeMessage, findMentionedTeams } from './router.js';
 import { invokeTeam } from '../teams/invoker.js';
 import { addMessage, getRecentConversation } from '../teams/context.js';
@@ -10,8 +13,9 @@ import { ledger } from '../teams/dispatch-ledger.js';
 import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import { startInboxCompactor } from './inbox-compactor.js';
-import { startMemoryConsolidator } from './memory-consolidator.js';
+import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
+import { writeEpisode } from './episode-writer.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -83,19 +87,46 @@ export function newChain(): ChainContext {
 }
 
 /**
- * Detect loop: same team pair repeating 3+ times consecutively.
- * e.g. [A,B,A,B,A,B] = A↔B loop
+ * Detect cyclic loop in the dispatch chain.
+ *
+ * Checks whether the tail of the path repeats a fixed-length cycle:
+ *   - Period 2 (A↔B):   requires 3 consecutive repeats (6 elements)
+ *   - Period 3 (A→B→C): requires 2 consecutive repeats (6 elements)
+ *
+ * General rule — for period N, requires `ceil(6/N)` full repeats so that
+ * the total checked length is always <= 6 (the recentPath cap).
+ *
+ * Examples:
+ *   [A,B,A,B,A,B]       → period 2, 3 reps → true
+ *   [A,B,C,A,B,C]       → period 3, 2 reps → true
+ *   [A,B,C,A,B]         → period 3, < 2 reps → false (not enough data)
+ *   [A,B,C,D,E,F]       → no repeating cycle → false
  */
 function detectLoop(chain: ChainContext, nextTeamId: string): boolean {
-  const path = [...chain.recentPath, nextTeamId];
-  if (path.length < 6) return false;
+  const trail = [...chain.recentPath, nextTeamId];
+  if (trail.length < 4) return false;
 
-  const last6 = path.slice(-6);
-  const pair = `${last6[0]}|${last6[1]}`;
-  for (let i = 2; i < last6.length - 1; i += 2) {
-    if (`${last6[i]}|${last6[i + 1]}` !== pair) return false;
+  // Try cycle periods from 2 up to half the trail length
+  const maxPeriod = Math.floor(trail.length / 2);
+  for (let period = 2; period <= maxPeriod; period++) {
+    // Require enough repeats so checked length >= 6 (stricter for short cycles)
+    const minRepeats = Math.max(2, Math.ceil(6 / period));
+    const needed = period * minRepeats;
+    if (trail.length < needed) continue;
+
+    const tail = trail.slice(-needed);
+    const cycle = tail.slice(0, period);
+
+    let match = true;
+    for (let i = period; i < tail.length; i++) {
+      if (tail[i] !== cycle[i % period]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
   }
-  return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +253,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       ],
     });
 
-    client.on('clientReady', () => {
+    client.on('clientReady', async () => {
       if (client.user) {
         botUserIds.add(client.user.id);
         if (team.discordUserId !== client.user.id) {
@@ -241,6 +272,78 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         if (team.isLeader) {
           syncMemberList(client, config.workspacePath).catch(() => {});
         }
+
+        // Register /reset slash command
+        try {
+          const resetCmd = new SlashCommandBuilder()
+            .setName('reset')
+            .setDescription('메모리 공장초기화 (long-term, short-term, episodes 삭제)');
+
+          // Leader gets a team option to reset any team
+          if (team.isLeader) {
+            const teamChoices = [
+              { name: '전체 (all)', value: 'all' },
+              ...Object.values(config.teams).map(t => ({ name: t.name, value: t.id })),
+            ];
+            resetCmd.addStringOption(opt =>
+              opt.setName('team')
+                .setDescription('초기화할 팀 (미선택 시 전체)')
+                .addChoices(...teamChoices),
+            );
+          }
+
+          const rest = new REST().setToken(team.discordToken);
+          const guildId = client.guilds.cache.first()?.id;
+          if (guildId) {
+            // Guild command: 즉시 반영 (global은 최대 1시간 대기)
+            await rest.put(
+              Routes.applicationGuildCommands(client.user.id, guildId),
+              { body: [resetCmd.toJSON()] },
+            );
+            console.log(`  ${team.name}: /reset slash command registered (guild: ${guildId})`);
+          } else {
+            console.warn(`  ${team.name}: No guild found, skipping slash command registration`);
+          }
+        } catch (err) {
+          console.error(`  ${team.name}: Failed to register slash command:`, err);
+        }
+      }
+    });
+
+    // Handle /reset slash command interaction
+    client.on('interactionCreate', async (interaction) => {
+      if (!interaction.isChatInputCommand()) return;
+      if (interaction.commandName !== 'reset') return;
+
+      // Permission check: humanDiscordId only
+      if (config.humanDiscordId && interaction.user.id !== config.humanDiscordId) {
+        await interaction.reply({ content: '메모리 초기화는 회장님만 실행할 수 있습니다.', ephemeral: true });
+        return;
+      }
+
+      if (team.isLeader) {
+        const target = interaction.options.getString('team') ?? 'all';
+
+        if (target === 'all') {
+          const results: string[] = [];
+          for (const t of Object.values(config.teams)) {
+            const cleared = resetTeamMemory(t.id, config.workspacePath);
+            results.push(`**${t.name}**: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(비어있음)'}`);
+          }
+          await interaction.reply(`전체 팀 메모리 초기화 완료:\n${results.join('\n')}`);
+        } else {
+          const t = config.teams[target];
+          if (!t) {
+            await interaction.reply({ content: `팀을 찾을 수 없습니다: ${target}`, ephemeral: true });
+            return;
+          }
+          const cleared = resetTeamMemory(t.id, config.workspacePath);
+          await interaction.reply(`**${t.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+        }
+      } else {
+        // Non-leader: reset own memory
+        const cleared = resetTeamMemory(team.id, config.workspacePath);
+        await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
       }
     });
 
@@ -351,6 +454,36 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 }
 
 // ---------------------------------------------------------------------------
+// Memory reset — 공장초기화
+// ---------------------------------------------------------------------------
+// Discord 슬래시 커맨드: /reset
+//   각 봇에서 실행하면 해당 봇의 메모리를 초기화.
+//   리더 봇에서는 team 옵션으로 특정 팀 또는 all 선택 가능.
+//
+// 삭제 대상: long-term.md, short-term.md, episodes.jsonl
+// 유지 대상: inbox, in-memory conversation history, persona prompt
+//
+// ⚠️ 회장님(humanDiscordId)만 실행 가능. 되돌릴 수 없음.
+// ---------------------------------------------------------------------------
+
+function resetTeamMemory(teamId: string, workspacePath: string): string[] {
+  const memoryDir = path.resolve(workspacePath, '.mococo/memory', teamId);
+  const cleared: string[] = [];
+
+  for (const file of ['long-term.md', 'short-term.md', 'episodes.jsonl']) {
+    const filePath = path.resolve(memoryDir, file);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        cleared.push(file);
+      }
+    } catch {}
+  }
+
+  return cleared;
+}
+
+// ---------------------------------------------------------------------------
 // Admin commands
 // ---------------------------------------------------------------------------
 
@@ -455,6 +588,7 @@ export async function handleTeamInvocation(
       trigger: triggerMsg.teamId === 'human' ? 'human_message' : 'team_mention',
       message: triggerMsg,
       conversation,
+      channelId,
     }, config, preloadedInbox);
 
     console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)})`);
@@ -498,6 +632,15 @@ export async function handleTeamInvocation(
       mentions: mentionedTeams.map(t => t.id),
     };
     addMessage(channelId, teamMsg);
+
+    // Write episode (await — must complete before markFree to prevent race with compactEpisodes)
+    await writeEpisode(
+      team.id, team.name, channelId, triggerMsg, result.output,
+      mentionedTeams.map(t => t.id), config.workspacePath,
+    ).catch(err => console.error(`[episode] ${err}`));
+
+    // Size-based consolidation trigger
+    checkSizeBasedConsolidation(team.id, team.name, config);
 
     // Resolve any pending dispatch records (this team reported back)
     ledger.resolve(team.id, mentionedTeams.map(t => t.id));
