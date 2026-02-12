@@ -97,18 +97,10 @@ interface ParsedCommand {
  * 인라인 코드(`...`)도 마스킹하여 코드 내 명령어 실행 방지.
  */
 function maskCodeFences(text: string): string {
-  // 1. Mask paired triple backtick fences (우선순위 높음)
-  let masked = text.replace(/```[\s\S]*?```/g, m => ' '.repeat(m.length));
-  // 2. Mask unclosed triple backtick fence (opening ``` without closing)
-  masked = masked.replace(/```[\s\S]*$/g, m => ' '.repeat(m.length));
-  // 3. Mask inline code (단일 백틱) — skip regions already masked (all-spaces) by steps 1-2
-  masked = masked.replace(/`[^`]+`/g, (m, offset) => {
-    // Check if this region was already masked (all spaces = inside a code block that was masked)
-    const region = masked.slice(offset, offset + m.length);
-    if (/^ +$/.test(region)) return region; // already masked, leave as-is
-    return ' '.repeat(m.length);
-  });
-  return masked;
+  // Single pass: triple backtick 블록과 inline code를 한 번에 처리하여
+  // 이중 마스킹 및 오프셋 계산 오류 방지
+  // 매칭 우선순위: paired ``` > unclosed ``` > inline `
+  return text.replace(/```[\s\S]*?```|```[\s\S]*$|`[^`]+`/g, m => ' '.repeat(m.length));
 }
 
 function parseCommands(output: string): ParsedCommand[] {
@@ -175,7 +167,10 @@ function parseParams(paramStr: string): Record<string, string> {
   while ((m = re.exec(paramStr)) !== null) {
     let value = m[2] ?? m[3];
     if (m[2] !== undefined) {
-      // 큰따옴표 내 이스케이프: \" → ", \\ → \ 만 허용. 기타 \x 시퀀스는 리터럴 유지
+      // 큰따옴표 내 이스케이프 시퀀스 처리 규칙:
+      //   지원: \\  → 리터럴 백슬래시(\)
+      //         \"  → 리터럴 큰따옴표(")
+      //   미지원: \n, \t 등 기타 시퀀스는 변환 없이 리터럴 그대로 유지 (예: \n → \n 문자 2개)
       value = value.replace(/\\(["\\])|\\(.)/g, (_, allowed, literal) => allowed ?? `\\${literal}`);
       // Path traversal 방지 (quoted 값): 파일 경로 관련 키에만 적용, _content 등 본문 키 제외
       const key = m[1];

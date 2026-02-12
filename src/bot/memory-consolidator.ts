@@ -89,10 +89,8 @@ function withTeamLock(teamId: string, fn: () => Promise<void>): Promise<void> {
   const prev = teamLocks.get(teamId) ?? Promise.resolve();
   const next = prev.then(fn, fn); // run fn after previous completes (even if it rejected)
   teamLocks.set(teamId, next);
-  // Clean up when chain settles to avoid memory leak
-  next.then(() => {
-    if (teamLocks.get(teamId) === next) teamLocks.delete(teamId);
-  }, () => {
+  // finally 블록으로 정리 이동 — .then 콜백이 새 호출에 의해 덮어쓰이는 race condition 방지
+  next.finally(() => {
     if (teamLocks.get(teamId) === next) teamLocks.delete(teamId);
   });
   return next;
@@ -170,6 +168,10 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
 
   if (old.length < 2) return; // not enough old episodes to compact
 
+  // 방어적 배열 접근 — old가 비어있으면 early return (위 조건과 이중 확인)
+  const lastOld = old[old.length - 1];
+  if (!lastOld) return;
+
   const oldSummaries = old.map(ep => `- ${ep.summary} (ch:${ep.channelId})`).join('\n');
 
   const prompt = `Summarize these old activity logs for team "${teamName}" into a single concise summary (max 5 lines, Korean).
@@ -182,9 +184,9 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
   const compactedSummary = await runHaiku(prompt);
 
   const compactedEpisode: Episode = {
-    ts: old[old.length - 1].ts, // use last old episode's timestamp
+    ts: lastOld.ts, // use last old episode's timestamp
     teamId,
-    channelId: old[old.length - 1].channelId,
+    channelId: lastOld.channelId,
     trigger: 'system',
     summary: `[통합 요약] ${compactedSummary.slice(0, 200)}`,
     mentions: [],

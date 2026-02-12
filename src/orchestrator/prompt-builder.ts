@@ -30,8 +30,9 @@ function readCached(filePath: string): string {
   }
 
   try {
-    const content = fs.readFileSync(filePath, 'utf-8').trim();
+    // 단일 stat 호출로 크기/수정시간 확인 후 내용 읽기 (이중 stat 방지)
     const stat = fs.statSync(filePath);
+    const content = fs.readFileSync(filePath, 'utf-8').trim();
     fileCache.set(filePath, { content, cachedAt: now, size: stat.size, mtimeMs: stat.mtimeMs });
     return content;
   } catch {

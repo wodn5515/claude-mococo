@@ -88,7 +88,9 @@ class DispatchLedger {
         const recCutoff = now - (r.hardCutoffMs ?? this.hardCutoffMs);
         if (r.dispatchedAt < recCutoff) {
           if (!r.resolved) {
-            console.warn(`[dispatch-ledger] Force-expiring unresolved record: ${r.fromTeam}→${r.toTeam} (${r.reason.slice(0, 50)})`);
+            const elapsedMin = Math.round((now - r.dispatchedAt) / 60_000);
+            const cutoffMin = Math.round((r.hardCutoffMs ?? this.hardCutoffMs) / 60_000);
+            console.warn(`[dispatch-ledger] Force-expiring unresolved record: ${r.fromTeam}→${r.toTeam} (${r.reason.slice(0, 50)}) — ${elapsedMin}분 경과 (timeout: ${cutoffMin}분)`);
           }
           return false;
         }

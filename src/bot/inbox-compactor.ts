@@ -318,6 +318,7 @@ async function dailyDigest(
 ): Promise<void> {
   const leader = Object.values(config.teams).find(t => t.isLeader);
   if (!leader) return;
+  if (isOccupied(leader.id)) return;
   const digestChannelId = env.workChannelId || env.memberTrackingChannelId;
   if (!digestChannelId) return;
 
@@ -330,6 +331,8 @@ async function dailyDigest(
   };
   addMessage(digestChannelId, digestMsg);
   await sendAsTeam(digestChannelId, leader, `📋 ${digestMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
+  // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
+  if (isOccupied(leader.id)) return;
   triggerInvocation(leader, digestMsg, digestChannelId, config, env, newChain());
 }
 
@@ -474,6 +477,8 @@ async function pendingTaskLoop(
     const pendingLeader = Object.values(config.teams).find(t => t.isLeader);
     addMessage(task.channelId, triggerMsg);
     if (pendingLeader) await sendAsTeam(task.channelId, pendingLeader, `📋 ${triggerMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
+    // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
+    if (isOccupied(team.id)) continue;
     triggerInvocation(team, triggerMsg, task.channelId, config, env, newChain());
     setPendingTaskCooldown(team.id);
     invoked++;

@@ -48,8 +48,9 @@ async function processInboxWriteQueue() {
   try {
     while (inboxQueueHead < inboxWriteQueue.length) {
       const task = inboxWriteQueue[inboxQueueHead++];
-      if (task.cancelled) continue; // timeout으로 취소된 task 스킵
+      if (task.cancelled) continue; // timeout으로 취소된 task 스킵 (실행 전 1차 확인)
       try {
+        if (task.cancelled) continue; // 실행 직전 2차 확인 — timeout race condition 방지
         await task.fn();
       } catch (err) {
         console.error('[inbox-queue] Write failed:', err);
@@ -81,7 +82,7 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
 
     const task: InboxTask = {
       fn: async () => {
-        if (settled) return; // timeout already fired
+        if (task.cancelled || settled) return; // cancelled 플래그 이중 확인 — timeout race condition 방지
         try {
           const dir = path.resolve(workspacePath, '.mococo/inbox');
           fs.mkdirSync(dir, { recursive: true });
@@ -256,12 +257,13 @@ function splitMessage(text: string, maxLen: number): string[] {
   if (text.length <= maxLen) return [text];
   const chunks: string[] = [];
   let remaining = text;
-  while (remaining.length > 0) {
+  while (remaining.length > maxLen) {
     let splitAt = remaining.lastIndexOf('\n', maxLen);
     if (splitAt <= 0) splitAt = maxLen;
     chunks.push(remaining.slice(0, splitAt));
     remaining = remaining.slice(splitAt);
   }
+  if (remaining.length > 0) chunks.push(remaining);
   return chunks;
 }
 

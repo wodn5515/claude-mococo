@@ -98,23 +98,26 @@ export function loadRecentEpisodes(
 
   const recent = lines.slice(-count);
   let parseFailures = 0;
+  let firstCorruptedSample = '';
   const formatted = recent.map(line => {
     try {
       const ep: Episode = JSON.parse(line);
       if (typeof ep.ts !== 'number' || isNaN(ep.ts)) {
         parseFailures++;
+        if (!firstCorruptedSample) firstCorruptedSample = line.slice(0, 100);
         return null;
       }
       const ago = formatTimeAgo(Date.now() - ep.ts);
       return `[${ago}] ${ep.summary} (ch:${ep.channelId})`;
     } catch {
       parseFailures++;
+      if (!firstCorruptedSample) firstCorruptedSample = line.slice(0, 100);
       return null;
     }
   }).filter(Boolean);
   if (parseFailures > 0) {
-    // 손상된 라인 수와 전체 라인 수를 함께 출력하여 심각도 파악 용이
-    console.warn(`[episode] ${teamId}: ${parseFailures}건의 손상된 라인 스킵됨 (전체 ${recent.length}건 중, 파일: ${filePath})`);
+    // 손상된 라인 수와 전체 라인 수, 첫 번째 손상 라인 샘플을 함께 출력
+    console.warn(`[episode] ${teamId}: ${parseFailures}건의 손상된 라인 스킵됨 (전체 ${recent.length}건 중, 파일: ${filePath}) — 첫 번째 손상: ${firstCorruptedSample}`);
   }
 
   return formatted.join('\n');

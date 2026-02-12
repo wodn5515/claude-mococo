@@ -91,7 +91,7 @@ function runGit(args: string[], cwd: string): Promise<GitResult> {
 // Strategy: recent N commits → changed files → deduplicate → sort by frequency
 // ---------------------------------------------------------------------------
 
-const RECENT_COMMITS_COUNT = 30; // Analyze last 30 commits
+const RECENT_COMMITS_COUNT = 15; // Analyze last 15 commits (출력 크기 감소로 truncation 재시도 최소화)
 
 interface FileEntry {
   filePath: string;       // relative path within repo
@@ -119,7 +119,7 @@ async function scanRepoFiles(repoPath: string): Promise<FileEntry[]> {
   while (commitCount >= MIN_COMMITS) {
     try {
       const result = await runGit(
-        ['log', `-${commitCount}`, '--format=%at', '--name-only', '--diff-filter=ACMR'],
+        ['log', `-${commitCount}`, '--format=%at', '--name-only', '--diff-filter=ACMR', '--no-renames'],
         repoPath,
       );
       if (result.truncated && commitCount > MIN_COMMITS) {
@@ -196,11 +196,13 @@ interface IssueItem {
 }
 
 function buildScanPrompt(repoName: string, files: { filePath: string; content: string }[]): string {
+  // 파일 경로와 내용을 JSON.stringify로 인코딩하여 프롬프트 인젝션 방지
   const fileEntries = files
-    .map(f => `### ${f.filePath}\n\`\`\`\n${f.content}\n\`\`\``)
+    .map(f => `### ${JSON.stringify(f.filePath).slice(1, -1)}\n\`\`\`\n${f.content.replace(/```/g, '` ` `')}\n\`\`\``)
     .join('\n\n');
 
-  return `You are a senior code reviewer analyzing files from the "${repoName}" repository.
+  const safeRepoName = JSON.stringify(repoName).slice(1, -1);
+  return `You are a senior code reviewer analyzing files from the "${safeRepoName}" repository.
 These files have been frequently modified recently and are potential hotspots that may need attention.
 
 ## Files to Analyze
@@ -221,7 +223,7 @@ For each file, check for:
 \`\`\`
 {
   "file": "relative/path/to/file.ts",
-  "repo": "${repoName}",
+  "repo": "${safeRepoName}",
   "type": "refactoring|security|error-risk|performance|code-quality",
   "severity": "high|medium|low",
   "description": "문제 설명 (Korean)",
