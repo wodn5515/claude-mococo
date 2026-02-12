@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { exec } from 'node:child_process';
 import {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   type GuildMember, type TextChannel, type Message, type ChatInputCommandInteraction,
@@ -272,7 +271,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           syncMemberList(client, config.workspacePath).catch(() => {});
         }
 
-        // Register slash commands (/reset, /restart)
+        // Register slash commands (/reset)
         try {
           const resetCmd = new SlashCommandBuilder()
             .setName('reset')
@@ -291,11 +290,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             );
           }
 
-          const restartCmd = new SlashCommandBuilder()
-            .setName('restart')
-            .setDescription('봇 서비스 재시작 (systemctl restart)');
-
-          const commands = [resetCmd.toJSON(), restartCmd.toJSON()];
+          const commands = [resetCmd.toJSON()];
 
           const rest = new REST().setToken(team.discordToken);
           const guildId = client.guilds.cache.first()?.id;
@@ -350,35 +345,6 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         const cleared = resetTeamMemory(team.id, config.workspacePath);
         await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
       }
-    });
-
-    // Handle /restart slash command interaction
-    client.on('interactionCreate', async (interaction) => {
-      if (!interaction.isChatInputCommand()) return;
-      if (interaction.commandName !== 'restart') return;
-
-      // Permission check: humanDiscordId only
-      if (config.humanDiscordId && interaction.user.id !== config.humanDiscordId) {
-        await interaction.reply({ content: '서비스 재시작은 회장님만 실행할 수 있습니다.', ephemeral: true });
-        return;
-      }
-
-      await interaction.reply('서비스 재시작 중... 잠시 후 봇이 다시 온라인됩니다.');
-
-      // Delay slightly so the reply is sent before the process exits
-      setTimeout(() => {
-        const restartCmd = process.platform === 'darwin'
-          ? 'launchctl kickstart -k gui/$(id -u)/com.mococo.claude-mococo'
-          : 'systemctl --user restart claude-mococo.service';
-
-        exec(restartCmd, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`[restart] Failed: ${err.message}`);
-            // Process may already be dying, but try to notify
-            interaction.followUp(`재시작 실패: ${err.message}`).catch(() => {});
-          }
-        });
-      }, 1000);
     });
 
     // Member join/leave tracking (leader only)
