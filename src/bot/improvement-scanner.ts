@@ -170,6 +170,7 @@ For each file, check for:
 }
 \`\`\`
 - Only report genuine issues worth fixing. Do NOT fabricate issues.
+- If a file ends with a "truncated" comment, do NOT report it as incomplete or broken — the code continues beyond what is shown.
 - If no issues are found, return an empty array: []`;
 }
 
@@ -219,17 +220,21 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
       const files = await scanRepoFiles(repoPath);
       if (files.length === 0) continue;
 
-      // Take top 20 most frequently changed files (hotspots)
-      const targetFiles = files.slice(0, 20);
+      // Take top 15 most frequently changed files (hotspots)
+      const targetFiles = files.slice(0, 15);
 
-      // Read first 100 lines of each file
+      // Read each file (up to MAX_LINES_PER_FILE lines to avoid token overflow)
+      const MAX_LINES_PER_FILE = 300;
       const fileContents: { filePath: string; content: string }[] = [];
       for (const entry of targetFiles) {
         try {
           const fullPath = path.join(repoPath, entry.filePath);
           const raw = fs.readFileSync(fullPath, 'utf-8');
-          const first100 = raw.split('\n').slice(0, 100).join('\n');
-          fileContents.push({ filePath: entry.filePath, content: first100 });
+          const lines = raw.split('\n');
+          const truncated = lines.length > MAX_LINES_PER_FILE;
+          const content = lines.slice(0, MAX_LINES_PER_FILE).join('\n')
+            + (truncated ? `\n// ... (truncated: ${lines.length - MAX_LINES_PER_FILE} more lines)` : '');
+          fileContents.push({ filePath: entry.filePath, content });
         } catch {
           // File unreadable, skip
         }
