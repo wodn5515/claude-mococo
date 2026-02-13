@@ -195,20 +195,42 @@ interface IssueItem {
   suggestion: string;
 }
 
-function buildScanPrompt(repoName: string, files: { filePath: string; content: string }[]): string {
+function buildScanPrompt(
+  repoName: string,
+  files: { filePath: string; content: string }[],
+  existingIssues?: IssueItem[],
+): string {
   // 파일 경로와 내용을 JSON.stringify로 인코딩하여 프롬프트 인젝션 방지
   const fileEntries = files
     .map(f => `### ${JSON.stringify(f.filePath).slice(1, -1)}\n\`\`\`\n${f.content.replace(/```/g, '` ` `')}\n\`\`\``)
     .join('\n\n');
 
   const safeRepoName = JSON.stringify(repoName).slice(1, -1);
+
+  // 기존 이슈 목록을 프롬프트에 포함 — 이미 보고된 이슈는 재보고 방지
+  let existingIssuesSection = '';
+  if (existingIssues && existingIssues.length > 0) {
+    const repoIssues = existingIssues.filter(i => i.repo === repoName);
+    if (repoIssues.length > 0) {
+      const issueList = repoIssues
+        .map(i => `- [${i.severity}] ${i.file}: ${i.type} — ${i.description.slice(0, 100)}`)
+        .join('\n');
+      existingIssuesSection = `
+
+## Previously Reported Issues (DO NOT re-report these)
+The following issues have already been reported. Do NOT include them again unless the code has fundamentally changed in a way that makes the previous report inaccurate.
+${issueList}
+`;
+    }
+  }
+
   return `You are a senior code reviewer analyzing files from the "${safeRepoName}" repository.
 These files have been frequently modified recently and are potential hotspots that may need attention.
 
 ## Files to Analyze
 
 ${fileEntries}
-
+${existingIssuesSection}
 ## Analysis Criteria
 For each file, check for:
 1. **refactoring** -- code that is overly complex, duplicated, or hard to maintain
@@ -230,9 +252,10 @@ For each file, check for:
   "suggestion": "권장 해결 방안 (Korean)"
 }
 \`\`\`
-- Only report genuine issues worth fixing. Do NOT fabricate issues.
+- Only report **NEW** genuine issues worth fixing. Do NOT fabricate issues.
+- Do NOT re-report previously reported issues unless the underlying code has significantly changed.
 - If a file ends with a "truncated" comment, do NOT report it as incomplete or broken — the code continues beyond what is shown.
-- If no issues are found, return an empty array: []`;
+- If no new issues are found, return an empty array: []`;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +287,33 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
     return;
   }
 
-  const allIssues: IssueItem[] = [];
+  // Load existing issues for merge and duplicate prevention
+  const inboxDir = path.resolve(ws, '.mococo/inbox');
+  fs.mkdirSync(inboxDir, { recursive: true });
+  const outputPath = path.resolve(inboxDir, 'improvement.json');
+
+  interface PersistedIssue extends IssueItem {
+    detectedAt: string;
+  }
+
+  let existingIssues: PersistedIssue[] = [];
+  try {
+    const raw = fs.readFileSync(outputPath, 'utf-8');
+    const data = JSON.parse(raw) as { issues?: PersistedIssue[] };
+    if (data.issues && Array.isArray(data.issues)) {
+      existingIssues = data.issues;
+    }
+  } catch {
+    // No existing file or parse error — start fresh
+  }
+
+  // Build lookup for existing issues (to preserve detectedAt timestamps)
+  const existingByKey = new Map<string, PersistedIssue>();
+  for (const issue of existingIssues) {
+    existingByKey.set(issueKey(issue), issue);
+  }
+
+  const newlyDetected: IssueItem[] = [];
 
   for (const repoName of repoDirs) {
     const repoPath = path.join(reposDir, repoName);
@@ -308,7 +357,8 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
 
       if (fileContents.length === 0) continue;
 
-      const prompt = buildScanPrompt(repoName, fileContents);
+      // Pass existing issues to Haiku to prevent re-reporting
+      const prompt = buildScanPrompt(repoName, fileContents, existingIssues);
       const output = await runHaiku(prompt);
 
       // Parse JSON output from Haiku
@@ -316,25 +366,41 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
       if (parsed.length === 0 && output.trim().length > 0) {
         console.warn(`[improvement-scanner] Haiku output for ${repoName} could not be parsed (${output.length} chars)`);
       }
-      allIssues.push(...parsed);
+      newlyDetected.push(...parsed);
 
     } catch (err) {
       console.error(`[improvement-scanner] Error scanning ${repoName}: ${err}`);
     }
   }
 
-  // Save results to improvement.json
-  const inboxDir = path.resolve(ws, '.mococo/inbox');
-  fs.mkdirSync(inboxDir, { recursive: true });
-  const outputPath = path.resolve(inboxDir, 'improvement.json');
-
+  // Merge: preserve existing issues that are re-detected, add new ones, remove resolved
   const now = new Date().toISOString();
+  const mergedIssues: PersistedIssue[] = [];
+  const newlyDetectedKeys = new Set<string>();
+
+  for (const issue of newlyDetected) {
+    const key = issueKey(issue);
+    newlyDetectedKeys.add(key);
+
+    const existing = existingByKey.get(key);
+    if (existing) {
+      // Re-detected — preserve original detectedAt
+      mergedIssues.push(existing);
+    } else {
+      // Genuinely new issue
+      mergedIssues.push({ ...issue, detectedAt: now });
+    }
+  }
+
+  // Log resolved issues (existed before but not re-detected)
+  const resolvedCount = existingIssues.filter(i => !newlyDetectedKeys.has(issueKey(i))).length;
+  if (resolvedCount > 0) {
+    console.log(`[improvement-scanner] ${resolvedCount} issue(s) resolved (auto-removed)`);
+  }
+
   const result = {
     lastScanAt: now,
-    issues: allIssues.map(issue => ({
-      ...issue,
-      detectedAt: now,
-    })),
+    issues: mergedIssues,
   };
 
   // Atomic write: write to temp file then rename to prevent data corruption
@@ -348,7 +414,9 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
     try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
     return;
   }
-  console.log(`[improvement-scanner] Scan complete: ${allIssues.length} issue(s) found across ${repoDirs.length} repo(s)`);
+  const newCount = newlyDetected.filter(i => !existingByKey.has(issueKey(i))).length;
+  const keptCount = mergedIssues.length - newCount;
+  console.log(`[improvement-scanner] Scan complete: ${mergedIssues.length} issue(s) total (${keptCount} existing, ${newCount} new, ${resolvedCount} resolved) across ${repoDirs.length} repo(s)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +472,10 @@ function parseHaikuOutput(output: string): IssueItem[] {
 const MAX_TRACKED_ISSUE_KEYS = 500;
 let previousIssueKeys = new Set<string>();
 
+// 중복 알림 차단: 마지막 알림 후 최소 대기 시간 (2시간)
+const NOTIFICATION_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+let lastNotificationTime = 0;
+
 function issueKey(issue: { file: string; repo: string; type: string; description: string }): string {
   return `${issue.repo}::${issue.file}::${issue.type}::${issue.description}`;
 }
@@ -454,6 +526,15 @@ function notifyLeaderOfNewIssues(
       return;
     }
 
+    // 중복 알림 차단: 마지막 알림 후 최소 대기 시간 경과 확인
+    const now = Date.now();
+    const timeSinceLastNotification = now - lastNotificationTime;
+    if (lastNotificationTime > 0 && timeSinceLastNotification < NOTIFICATION_COOLDOWN_MS) {
+      const remainingMinutes = Math.ceil((NOTIFICATION_COOLDOWN_MS - timeSinceLastNotification) / 60_000);
+      console.log(`[improvement-monitor] ${newIssues.length} new issue(s) detected — notification suppressed (cooldown: ${remainingMinutes}분 남음)`);
+      return;
+    }
+
     // Find leader team
     const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
     if (!leaderTeam) return;
@@ -466,6 +547,7 @@ function notifyLeaderOfNewIssues(
       const systemMessage = `[개선사항 발견] ${newIssues.length}개 코드 개선 항목 — 검토 및 작업 배정 필요`;
       console.log(`[improvement-monitor] ${systemMessage}`);
       triggerInvocation(leaderTeam, improvementChannelId, systemMessage);
+      lastNotificationTime = now; // 알림 발송 시각 기록
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
