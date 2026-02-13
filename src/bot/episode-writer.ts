@@ -1,20 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runHaiku } from '../utils/haiku.js';
+import { atomicWriteSync } from '../utils/fs.js';
 import type { Episode, ConversationMessage } from '../types.js';
 
 const MAX_EPISODE_LINES = 200;
-
-function atomicWriteSync(filePath: string, content: string): void {
-  const tmp = filePath + '.tmp';
-  try {
-    fs.writeFileSync(tmp, content);
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // writeEpisode — Haiku로 요약 생성 후 episodes.jsonl에 append

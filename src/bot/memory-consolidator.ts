@@ -1,21 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runHaiku } from '../utils/haiku.js';
+import { atomicWriteSync } from '../utils/fs.js';
 import { isBusy } from '../teams/concurrency.js';
 import type { TeamsConfig, Episode } from '../types.js';
-
-/** Atomic write: write to temp file then rename to avoid corruption on crash. */
-function atomicWriteSync(filePath: string, content: string): void {
-  const tmp = filePath + '.tmp';
-  try {
-    fs.writeFileSync(tmp, content);
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    // Clean up temp file on failure
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
 
 const CONSOLIDATE_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIZE_THRESHOLD_BYTES = 3 * 1024; // 3KB
