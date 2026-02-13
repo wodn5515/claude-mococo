@@ -857,6 +857,27 @@ function dispatchMentionedTeams(
     // Skip human mentions (not a team to invoke)
     if (target.discordUserId === config.humanDiscordId) continue;
 
+    // Non-leader → Leader: inbox only (no direct invoke)
+    // Leader will pick it up via heartbeat/fs.watch, preventing redundant round-trips
+    if (target.isLeader && !sourceTeam.isLeader) {
+      console.log(`[dispatch] ${sourceTeam.name} → ${target.name}: inbox-only (non-leader→leader)`);
+      appendToInbox(
+        target.id,
+        sourceTeam.name,
+        finalOutput.slice(0, 500),
+        config.workspacePath,
+        channelId,
+      ).catch(() => {});
+      ledger.record(chain.chainId, sourceTeam.id, target.id, channelId, finalOutput.slice(0, 200));
+      // Auto-resolve: non-leader report to leader doesn't need follow-up tracking
+      const records = ledger.getUnresolved();
+      const lastRecord = records[records.length - 1];
+      if (lastRecord && lastRecord.toTeam === target.id) {
+        ledger.resolveById(lastRecord.id);
+      }
+      continue;
+    }
+
     // Skip if already queued
     if (isQueued(target.id)) {
       console.log(`[dispatch] Skip ${target.name} — already queued`);
