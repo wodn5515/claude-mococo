@@ -11,7 +11,7 @@ type InvocationTrigger = (team: TeamConfig, channelId: string, systemMessage: st
 const SCANNABLE_EXTENSIONS = new Set(['.ts', '.js', '.py', '.json', '.md']);
 const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'dist', 'build']);
 const EXCLUDED_PATTERNS = [/\.lock$/];
-const EXCLUDED_REPOS = new Set(['atom.io']);
+const EXCLUDED_REPOS = new Set(['atom.io', 'orbi-advance']);
 
 // ---------------------------------------------------------------------------
 // Git helper -- run git command via spawn
