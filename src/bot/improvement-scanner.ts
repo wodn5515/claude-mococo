@@ -297,15 +297,20 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
   }
 
   let existingIssues: PersistedIssue[] = [];
+  let dismissedKeys: string[] = [];
   try {
     const raw = fs.readFileSync(outputPath, 'utf-8');
-    const data = JSON.parse(raw) as { issues?: PersistedIssue[] };
+    const data = JSON.parse(raw) as { issues?: PersistedIssue[]; dismissedKeys?: string[] };
     if (data.issues && Array.isArray(data.issues)) {
       existingIssues = data.issues;
+    }
+    if (data.dismissedKeys && Array.isArray(data.dismissedKeys)) {
+      dismissedKeys = data.dismissedKeys;
     }
   } catch {
     // No existing file or parse error — start fresh
   }
+  const dismissedKeySet = new Set(dismissedKeys);
 
   // Build lookup for existing issues (to preserve detectedAt timestamps)
   const existingByKey = new Map<string, PersistedIssue>();
@@ -382,6 +387,9 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
     const key = issueKey(issue);
     newlyDetectedKeys.add(key);
 
+    // Skip dismissed issues (manually reviewed and marked as false positive)
+    if (dismissedKeySet.has(key)) continue;
+
     const existing = existingByKey.get(key);
     if (existing) {
       // Re-detected — preserve original detectedAt
@@ -401,6 +409,7 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
   const result = {
     lastScanAt: now,
     issues: mergedIssues,
+    ...(dismissedKeys.length > 0 ? { dismissedKeys } : {}),
   };
 
   // Atomic write: write to temp file then rename to prevent data corruption
