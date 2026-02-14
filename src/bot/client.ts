@@ -5,6 +5,7 @@ import {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   type GuildMember, type TextChannel, type Message, type ChatInputCommandInteraction,
 } from 'discord.js';
+import { atomicWriteSync } from '../utils/fs.js';
 import { routeMessage, findMentionedTeams } from './router.js';
 import { invokeTeam } from '../teams/invoker.js';
 import { addMessage, getRecentConversation } from '../teams/context.js';
@@ -352,7 +353,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
             if (raw.teams[team.id]) {
               raw.teams[team.id].discordUserId = client.user.id;
-              fs.writeFileSync(teamsJsonPath, JSON.stringify(raw, null, 2) + '\n');
+              atomicWriteSync(teamsJsonPath, JSON.stringify(raw, null, 2) + '\n');
             }
           } catch (err) {
             console.warn(`[client] Failed to sync discordUserId for ${team.name}: ${err}`);

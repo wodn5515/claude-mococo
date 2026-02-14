@@ -70,7 +70,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
     teams[id] = {
       id,
       name: cfg.name,
-      color: parseInt(cfg.color.replace('#', ''), 16),
+      color: cfg.color ? parseInt(cfg.color.replace('#', ''), 16) : 0x808080,
       avatar: AVATAR_MAP[cfg.avatar] ?? cfg.avatar,
       engine: cfg.engine ?? 'claude',
       model: cfg.model ?? 'sonnet',
