@@ -365,9 +365,15 @@ async function hrEvaluationLoop(
     try {
       fs.renameSync(logFile, tmpFile);
       activityLog = fs.readFileSync(tmpFile, 'utf-8').trim();
-      fs.unlinkSync(tmpFile);
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch (unlinkErr) {
+        console.warn(`[hr-eval] Failed to clean up temp file ${tmpFile}: ${unlinkErr}`);
+      }
     } catch {
       // File doesn't exist or empty — no activity
+      // Also clean up stale temp file from previous failed run
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
     }
 
     if (!activityLog) {
@@ -518,6 +524,20 @@ async function pendingTaskLoop(
 }
 
 // ---------------------------------------------------------------------------
+// Timer management for graceful shutdown
+// ---------------------------------------------------------------------------
+
+const activeTimers: ReturnType<typeof setInterval>[] = [];
+
+export function stopInboxCompactor(): void {
+  for (const timer of activeTimers) {
+    clearInterval(timer);
+  }
+  activeTimers.length = 0;
+  console.log('[inbox-compactor] Stopped all timers');
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -591,46 +611,46 @@ export function startInboxCompactor(
   }
 
   // Leader heartbeat: periodic check every 10 minutes
-  setInterval(executeHeartbeat, HEARTBEAT_MS);
+  activeTimers.push(setInterval(executeHeartbeat, HEARTBEAT_MS));
 
   // Follow-up loop: check dispatch ledger every 2 minutes
-  setInterval(() => {
+  activeTimers.push(setInterval(() => {
     followUpLoop(config, env, triggerInvocation).catch(err => {
       console.error(`[follow-up] Unhandled error: ${err}`);
     });
-  }, FOLLOW_UP_MS);
+  }, FOLLOW_UP_MS));
 
   // Pending task loop: every 60 seconds
-  setInterval(() => {
+  activeTimers.push(setInterval(() => {
     pendingTaskLoop(config, env, triggerInvocation).catch(err => {
       console.error(`[pending-task] Unhandled error: ${err}`);
     });
-  }, PENDING_TASK_INTERVAL_MS);
+  }, PENDING_TASK_INTERVAL_MS));
 
   // Daily digest: every 24 hours (first run after 1 hour)
-  setTimeout(() => {
+  activeTimers.push(setTimeout(() => {
     dailyDigest(config, env, triggerInvocation).catch(err => {
       console.error(`[daily-digest] Unhandled error: ${err}`);
     });
-    setInterval(() => {
+    activeTimers.push(setInterval(() => {
       dailyDigest(config, env, triggerInvocation).catch(err => {
         console.error(`[daily-digest] Unhandled error: ${err}`);
       });
-    }, DAILY_DIGEST_MS);
-  }, 60 * 60_000);
+    }, DAILY_DIGEST_MS));
+  }, 60 * 60_000));
 
   // HR evaluation loop: every 2 hours (first run after 10 minutes)
   const hrTeamCheck = Object.values(config.teams).find(t => t.id === 'hr');
   if (hrTeamCheck) {
-    setTimeout(() => {
+    activeTimers.push(setTimeout(() => {
       hrEvaluationLoop(config, env, triggerInvocation).catch(err => {
         console.error(`[hr-eval] Unhandled error: ${err}`);
       });
-      setInterval(() => {
+      activeTimers.push(setInterval(() => {
         hrEvaluationLoop(config, env, triggerInvocation).catch(err => {
           console.error(`[hr-eval] Unhandled error: ${err}`);
         });
-      }, HR_EVAL_MS);
-    }, 10 * 60_000); // First run after 10 minutes
+      }, HR_EVAL_MS));
+    }, 10 * 60_000)); // First run after 10 minutes
   }
 }
