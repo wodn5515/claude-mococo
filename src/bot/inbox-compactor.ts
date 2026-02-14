@@ -572,6 +572,10 @@ export function startInboxCompactor(
     };
     addMessage(channelId, systemMsg);
     await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
+    if (isOccupied(leaderTeam.id)) {
+      console.log('[inbox-compactor] Leader became busy before invoke, skipping');
+      return;
+    }
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
   };
 
