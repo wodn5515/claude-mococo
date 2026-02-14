@@ -821,9 +821,41 @@ export async function handleTeamInvocation(
     // Resolve any pending dispatch records (this team reported back)
     ledger.resolve(team.id, mentionedTeams.map(t => t.id));
 
-    // Reactive dispatch: invoke mentioned teams directly
+    // ---------------------------------------------------------------------------
+    // Centralized dispatch: ONLY the leader dispatches to other teams.
+    // Non-leader output with mentions is routed to the leader's inbox so the
+    // leader can decide whether (and when) to invoke the mentioned teams.
+    // ---------------------------------------------------------------------------
     if (finalOutput) {
-      dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
+      if (team.isLeader) {
+        // Leader dispatches directly to mentioned teams
+        dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
+      } else {
+        // Non-leader: route mentions to leader inbox for centralized dispatch
+        const mentionedInOutput = findMentionedTeams(result.output, config);
+        const nonSelfMentions = mentionedInOutput.filter(
+          t => t.id !== team.id && t.discordUserId !== config.humanDiscordId,
+        );
+        if (nonSelfMentions.length > 0) {
+          const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+          if (leaderTeam) {
+            appendToInbox(
+              leaderTeam.id,
+              team.name,
+              finalOutput.slice(0, 500),
+              config.workspacePath,
+              channelId,
+            ).catch(() => {});
+          }
+          // Record and auto-resolve in ledger (non-leader report, no follow-up needed)
+          for (const target of nonSelfMentions) {
+            if (target.isLeader) {
+              const rec = ledger.record(chain.chainId, team.id, target.id, channelId, finalOutput.slice(0, 200));
+              ledger.resolveById(rec.id);
+            }
+          }
+        }
+      }
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -836,7 +868,7 @@ export async function handleTeamInvocation(
 }
 
 // ---------------------------------------------------------------------------
-// Reactive dispatch — bot output mentions → invoke those teams
+// Centralized dispatch — leader-only: invoke mentioned teams from leader output
 // ---------------------------------------------------------------------------
 
 function dispatchMentionedTeams(
@@ -851,43 +883,25 @@ function dispatchMentionedTeams(
   const mentioned = findMentionedTeams(rawOutput, config);
 
   for (const target of mentioned) {
-    // Skip self
     if (target.id === sourceTeam.id) continue;
-
-    // Skip human mentions (not a team to invoke)
     if (target.discordUserId === config.humanDiscordId) continue;
 
-    // Skip if already queued
     if (isQueued(target.id)) {
       console.log(`[dispatch] Skip ${target.name} — already queued`);
       continue;
     }
 
-    // Loop detection
     if (detectLoop(chain, target.id)) {
       const trail = [...chain.recentPath, target.id];
       console.log(`[dispatch] Loop detected in chain ${trail.slice(-6).join('→')}, stopping dispatch to ${target.name}`);
       continue;
     }
 
-    // Budget check
     if (chain.totalInvocations >= chain.maxBudget) {
       console.log(`[dispatch] Chain budget exhausted (${chain.maxBudget}), stopping`);
-      // Notify leader about budget exhaustion
-      const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
-      if (leaderTeam && sourceTeam.id !== leaderTeam.id) {
-        appendToInbox(
-          leaderTeam.id,
-          'System',
-          `[체인 예산 초과] ${sourceTeam.name}의 chain이 ${chain.maxBudget}회 invoke에 도달. 추가 dispatch 중단됨.`,
-          config.workspacePath,
-          channelId,
-        ).catch(() => {});
-      }
       break;
     }
 
-    // Record in dispatch ledger
     ledger.record(chain.chainId, sourceTeam.id, target.id, channelId, finalOutput.slice(0, 200));
 
     const triggerMsg: ConversationMessage = {
@@ -907,7 +921,6 @@ function dispatchMentionedTeams(
       recentPath: [...chain.recentPath.slice(-5), target.id],
     };
 
-    // Fire and forget — don't await to allow parallel dispatches
     handleTeamInvocation(target, triggerMsg, channelId, config, env, nextChain);
   }
 }
