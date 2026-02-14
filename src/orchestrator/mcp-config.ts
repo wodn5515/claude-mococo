@@ -1,6 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
+import fs from 'node:fs';
 import type { McpServerConfig } from '../types.js';
+import { atomicWriteSync } from '../utils/fs.js';
 
 export function writeMcpConfig(
   teamId: string,
@@ -11,7 +12,7 @@ export function writeMcpConfig(
   fs.mkdirSync(mcpDir, { recursive: true });
   const filePath = path.join(mcpDir, `${teamId}.json`);
   const config = { mcpServers: servers };
-  fs.writeFileSync(filePath, JSON.stringify(config, null, 2));
+  atomicWriteSync(filePath, JSON.stringify(config, null, 2));
   return filePath;
 }
 
