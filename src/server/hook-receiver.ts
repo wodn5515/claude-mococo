@@ -4,6 +4,8 @@ import type { HookEvent } from '../types.js';
 
 export const hookEvents = new EventEmitter();
 
+const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
+
 export function startHookServer(port: number) {
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/hook') {
@@ -13,8 +15,25 @@ export function startHookServer(port: number) {
     }
 
     let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    let size = 0;
+    let aborted = false;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        if (!aborted) {
+          aborted = true;
+          console.warn(`[hook-receiver] Request body exceeded ${MAX_BODY_SIZE} bytes, rejecting`);
+          res.writeHead(413);
+          res.end();
+          req.destroy();
+        }
+        return;
+      }
+      body += chunk;
+    });
     req.on('end', () => {
+      if (aborted) return;
       try {
         const event: HookEvent = JSON.parse(body);
         hookEvents.emit('any', event);
