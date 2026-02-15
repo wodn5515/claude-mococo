@@ -62,7 +62,9 @@ async function processInboxWriteQueue() {
 
   try {
     while (inboxQueueHead < inboxWriteQueue.length) {
-      const task = inboxWriteQueue[inboxQueueHead++];
+      const task = inboxWriteQueue[inboxQueueHead];
+      inboxWriteQueue[inboxQueueHead] = null as any; // Release reference for GC
+      inboxQueueHead++;
       if (task.cancelled) continue; // timeout으로 취소된 task 스킵 (실행 전 1차 확인)
       try {
         if (task.cancelled) continue; // 실행 직전 2차 확인 — timeout race condition 방지
@@ -313,6 +315,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   }
 
   // 주기적 정리: 2분마다 만료 항목 제거
+  // Runs for entire process lifetime — no cleanup needed
   setInterval(() => trimProcessedMsgs(), 2 * 60_000);
 
   // Forward hook events as team progress in Discord

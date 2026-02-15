@@ -105,6 +105,8 @@ function isScannableFile(filePath: string): boolean {
   if (EXCLUDED_PATTERNS.some(p => p.test(filePath))) return false;
 
   const parts = filePath.split(path.sep);
+  // Path traversal prevention: reject paths containing '..' segments
+  if (parts.some(part => part === '..')) return false;
   return !parts.some(part => EXCLUDED_DIRS.has(part));
 }
 
@@ -342,10 +344,14 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
       // Read each file (up to MAX_LINES_PER_FILE lines to avoid token overflow)
       const MAX_LINES_PER_FILE = 300;
       const fileContents: { filePath: string; content: string }[] = [];
+      const resolvedRepo = fs.realpathSync(repoPath);
       const readPromises = targetFiles.map(async (entry) => {
         try {
           const fullPath = path.join(repoPath, entry.filePath);
-          const raw = await fs.promises.readFile(fullPath, 'utf-8');
+          // Path traversal prevention: ensure resolved path is within repo
+          const resolved = fs.realpathSync(fullPath);
+          if (!resolved.startsWith(resolvedRepo + path.sep) && resolved !== resolvedRepo) return null;
+          const raw = await fs.promises.readFile(resolved, 'utf-8');
           const lines = raw.split('\n');
           const truncated = lines.length > MAX_LINES_PER_FILE;
           const content = lines.slice(0, MAX_LINES_PER_FILE).join('\n')
