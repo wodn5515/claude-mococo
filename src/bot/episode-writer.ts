@@ -98,7 +98,7 @@ export function loadRecentEpisodes(
         return null;
       }
       const ago = formatTimeAgo(Date.now() - ep.ts);
-      return `[${ago}] ${ep.summary} (ch:${ep.channelId})`;
+      return `[${ago}] ${ep.summary ?? '(no summary)'} (ch:${ep.channelId ?? 'unknown'})`;
     } catch {
       parseFailures++;
       if (!firstCorruptedSample) firstCorruptedSample = line.slice(0, 100);
