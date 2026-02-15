@@ -130,6 +130,20 @@ async function leaderHeartbeat(
     let improvementReport: string | null = null;
     try {
       const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+
+      // Clean up orphaned tmp file from previous crash (renameSync failure or process crash)
+      const tmpPath = improvementPath + '.tmp';
+      try {
+        const tmpStat = fs.statSync(tmpPath);
+        // Remove if older than 1 minute (not from an in-progress write)
+        if (Date.now() - tmpStat.mtimeMs > 60_000) {
+          fs.unlinkSync(tmpPath);
+          console.log('[heartbeat] Cleaned up orphaned improvement.json.tmp');
+        }
+      } catch {
+        // No tmp file — normal scenario
+      }
+
       const raw = fs.readFileSync(improvementPath, 'utf-8');
       if (!raw.trim()) throw Object.assign(new Error('Empty file'), { code: 'EMPTY' });
       let data: any;

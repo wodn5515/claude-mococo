@@ -77,6 +77,14 @@ function withTeamLock(teamId: string, fn: () => Promise<void>): Promise<void> {
   const prev = teamLocks.get(teamId) ?? Promise.resolve();
   const next = prev.then(fn, fn); // run fn after previous completes (even if it rejected)
   teamLocks.set(teamId, next);
+  // Cleanup: only delete from map if no newer call has replaced our promise.
+  // This prevents a race condition where a new caller's prev reference is lost
+  // when an earlier caller's finally block deletes the entry.
+  void next.finally(() => {
+    if (teamLocks.get(teamId) === next) {
+      teamLocks.delete(teamId);
+    }
+  });
   return next;
 }
 
