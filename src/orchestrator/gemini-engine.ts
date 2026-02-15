@@ -20,9 +20,23 @@ export class GeminiEngine extends BaseEngine {
       return;
     }
 
+    const MAX_STDOUT = 5 * 1024 * 1024; // 5MB
     let stdout = '';
+    let stdoutTruncated = false;
     this.proc.stdout!.on('data', (chunk: Buffer) => {
+      if (stdoutTruncated) return;
       stdout += chunk.toString();
+      if (stdout.length > MAX_STDOUT) {
+        stdoutTruncated = true;
+        stdout = stdout.slice(0, MAX_STDOUT);
+        console.warn(`[gemini:${this.opts.teamId}] stdout truncated at ${MAX_STDOUT} bytes`);
+        this.proc?.kill('SIGTERM');
+      }
+    });
+
+    this.proc.on('error', (err) => {
+      console.error(`[gemini:${this.opts.teamId}] spawn error: ${err.message}`);
+      this.emit('exit', 1);
     });
 
     this.proc.on('error', (err) => {
