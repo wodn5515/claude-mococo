@@ -212,7 +212,7 @@ function buildScanPrompt(
   // 기존 이슈 목록을 프롬프트에 포함 — 이미 보고된 이슈는 재보고 방지
   let existingIssuesSection = '';
   if (existingIssues && existingIssues.length > 0) {
-    const repoIssues = existingIssues.filter(i => i.repo === repoName);
+    const repoIssues = existingIssues.filter(i => i.repo === safeRepoName);
     if (repoIssues.length > 0) {
       const issueList = repoIssues
         .map(i => `- [${i.severity}] ${i.file}: ${i.type} — ${i.description.slice(0, 100)}`)
