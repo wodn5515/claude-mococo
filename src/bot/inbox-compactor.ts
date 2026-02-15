@@ -144,6 +144,12 @@ async function leaderHeartbeat(
         // No tmp file — normal scenario
       }
 
+      // Guard: after tmp cleanup, the original file may not exist (atomicWriteSync failure scenario)
+      if (!fs.existsSync(improvementPath)) {
+        // File absent — treat as empty state, skip improvement report
+        throw Object.assign(new Error('File not found after tmp cleanup'), { code: 'ENOENT' });
+      }
+
       const raw = fs.readFileSync(improvementPath, 'utf-8');
       if (!raw.trim()) throw Object.assign(new Error('Empty file'), { code: 'EMPTY' });
       let data: any;
@@ -155,7 +161,9 @@ async function leaderHeartbeat(
         try {
           atomicWriteSync(improvementPath, emptyData);
         } catch (writeErr) {
-          console.warn(`[heartbeat] Failed to recreate improvement.json: ${writeErr}`);
+          console.error(`[heartbeat] atomicWriteSync failed for ${improvementPath}: ${writeErr instanceof Error ? writeErr.message : writeErr}`);
+          // atomicWriteSync failure may leave orphaned .tmp — will be cleaned next cycle
+          data = { issues: [] };
         }
         data = { issues: [] };
       }
