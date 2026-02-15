@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runHaiku } from '../utils/haiku.js';
+import { atomicWriteSync } from '../utils/fs.js';
 import { isBusy, isQueued } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { addMessage } from '../teams/context.js';
@@ -137,11 +138,11 @@ async function leaderHeartbeat(
       } catch (parseErr) {
         console.warn(`[heartbeat] Corrupted improvement.json, recreating: ${parseErr}`);
         const emptyData = JSON.stringify({ issues: [] }, null, 2);
-        const tmpPath = improvementPath + '.tmp';
         try {
-          fs.writeFileSync(tmpPath, emptyData);
-          fs.renameSync(tmpPath, improvementPath);
-        } catch { try { fs.unlinkSync(tmpPath); } catch {} }
+          atomicWriteSync(improvementPath, emptyData);
+        } catch (writeErr) {
+          console.warn(`[heartbeat] Failed to recreate improvement.json: ${writeErr}`);
+        }
         data = { issues: [] };
       }
       const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
