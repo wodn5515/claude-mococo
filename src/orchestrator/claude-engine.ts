@@ -38,9 +38,12 @@ export class ClaudeEngine extends BaseEngine {
     let exitCode: number | null = null;
     let rlClosed = false;
     let procExited = false;
+    let exitEmitted = false;
 
     const maybeEmitExit = () => {
+      if (exitEmitted) return;
       if (rlClosed && procExited) {
+        exitEmitted = true;
         if (this.mcpConfigPath) cleanupMcpConfig(this.opts.teamId, this.opts.cwd);
         this.emit('exit', exitCode);
       }

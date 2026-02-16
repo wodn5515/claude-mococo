@@ -171,10 +171,12 @@ async function leaderHeartbeat(
         improvementReport = lines.join('\n');
       }
     } catch (err: unknown) {
-      // ENOENT is expected — improvement.json may not exist yet
-      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-        // silent: file does not exist yet, normal scenario
-      } else {
+      // ENOENT / EMPTY is expected — improvement.json may not exist yet or be empty
+      const isExpected = err instanceof Error && (
+        (err as NodeJS.ErrnoException).code === 'ENOENT' ||
+        (err as NodeJS.ErrnoException).code === 'EMPTY'
+      );
+      if (!isExpected) {
         console.warn(`[heartbeat] Failed to parse improvement.json: ${err}`);
       }
     }
@@ -275,7 +277,12 @@ async function followUpLoop(
       const nudgeLeader = Object.values(config.teams).find(t => t.isLeader);
       addMessage(record.channelId, nudgeMsg);
       if (nudgeLeader) await sendAsTeam(record.channelId, nudgeLeader, `📋 ${nudgeMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
-      triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
+      // sendAsTeam await 후 재확인 — 비동기 간격 동안 상태 변경 가능
+      if (isOccupied(team.id)) {
+        console.log(`[follow-up] ${team.name} became occupied during nudge, skipping invocation`);
+      } else {
+        triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
+      }
       nudgeCounts.set(record.id, currentNudges + 1);
       setFollowUpCooldown(team.id);
       break; // One nudge per cycle
@@ -296,7 +303,12 @@ async function followUpLoop(
         if (alertChannelId) {
           addMessage(alertChannelId, alertMsg);
           await sendAsTeam(alertChannelId, leader, `📋 ${alertMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
-          triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
+          // sendAsTeam await 후 재확인 — 비동기 간격 동안 상태 변경 가능
+          if (isOccupied(leader.id)) {
+            console.log(`[follow-up] Leader became occupied during alert, skipping invocation`);
+          } else {
+            triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
+          }
         }
       }
       // Auto-resolve after leader alert to prevent repeated notifications

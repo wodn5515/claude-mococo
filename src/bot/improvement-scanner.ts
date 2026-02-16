@@ -130,6 +130,9 @@ async function scanRepoFiles(repoPath: string): Promise<FileEntry[]> {
         commitCount = reduced;
         continue;
       }
+      if (result.truncated) {
+        console.warn(`[improvement-scanner] Output still truncated at MIN_COMMITS(${MIN_COMMITS}), using partial result`);
+      }
       output = result.output;
       break;
     } catch {
@@ -215,7 +218,7 @@ function buildScanPrompt(
     const repoIssues = existingIssues.filter(i => i.repo === repoName);
     if (repoIssues.length > 0) {
       const issueList = repoIssues
-        .map(i => `- [${i.severity}] ${i.file}: ${i.type} — ${i.description.slice(0, 100)}`)
+        .map(i => `- [${i.severity}] ${JSON.stringify(i.file).slice(1, -1)}: ${i.type} — ${i.description.slice(0, 100)}`)
         .join('\n');
       existingIssuesSection = `
 

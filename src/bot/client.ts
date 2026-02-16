@@ -298,13 +298,16 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   const MAX_TRACKED_MSGS = 500;
   const MSG_EXPIRY_MS = 5 * 60_000; // 5분 경과 메시지 자동 만료
 
-  function trimProcessedMsgs() {
-    // 먼저 오래된 항목 시간 기반 제거
+  /** Lightweight: only evict when size exceeds MAX — called on every message add. */
+  function evictOldestIfNeeded() {
+    if (processedMsgIds.size <= MAX_TRACKED_MSGS) return;
+    // 먼저 expired 항목 제거 시도 (size 이하로 줄어들면 조기 종료)
     const cutoff = Date.now() - MSG_EXPIRY_MS;
     for (const [id, ts] of processedMsgIds) {
+      if (processedMsgIds.size <= MAX_TRACKED_MSGS) break;
       if (ts < cutoff) processedMsgIds.delete(id);
     }
-    // 그래도 초과하면 FIFO 강제 제거 (Map 삽입 순서 이용)
+    // 여전히 초과면 FIFO 강제 제거 (Map 삽입 순서 이용)
     if (processedMsgIds.size <= MAX_TRACKED_MSGS) return;
     const overflow = processedMsgIds.size - MAX_TRACKED_MSGS;
     let removed = 0;
@@ -315,9 +318,17 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     }
   }
 
-  // 주기적 정리: 2분마다 만료 항목 제거
+  /** Full sweep: remove all expired entries — called periodically by setInterval. */
+  function cleanupExpiredEntries() {
+    const cutoff = Date.now() - MSG_EXPIRY_MS;
+    for (const [id, ts] of processedMsgIds) {
+      if (ts < cutoff) processedMsgIds.delete(id);
+    }
+  }
+
+  // 주기적 정리: 2분마다 만료 항목 전체 제거
   // Runs for entire process lifetime — no cleanup needed
-  setInterval(() => trimProcessedMsgs(), 2 * 60_000);
+  setInterval(() => cleanupExpiredEntries(), 2 * 60_000);
 
   // Forward hook events as team progress in Discord
   hookEvents.on('any', async (event) => {
@@ -498,7 +509,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         };
         if (!processedMsgIds.has(msg.id)) {
           processedMsgIds.set(msg.id, Date.now());
-          trimProcessedMsgs();
+          evictOldestIfNeeded();
           addMessage(msg.channelId, humanMsg);
           appendHrActivityLog(config.workspacePath, {
             ts: Date.now(),
@@ -536,7 +547,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         };
         if (!processedMsgIds.has(msg.id)) {
           processedMsgIds.set(msg.id, Date.now());
-          trimProcessedMsgs();
+          evictOldestIfNeeded();
           addMessage(msg.channelId, humanMsg);
           appendHrActivityLog(config.workspacePath, {
             ts: Date.now(),
