@@ -111,8 +111,12 @@ export function loadRecentEpisodes(
     const totalCorrupted = lines.filter(l => { try { const e = JSON.parse(l); return typeof e.ts !== 'number' || isNaN(e.ts); } catch { return true; } }).length;
     if (totalCorrupted > 0 && totalCorrupted / lines.length >= 0.3) {
       const validLines = lines.filter(l => { try { const e = JSON.parse(l); return typeof e.ts === 'number' && !isNaN(e.ts); } catch { return false; } });
-      atomicWriteSync(filePath, validLines.join('\n') + '\n');
-      console.log(`[episode] ${teamId}: Self-healing — ${totalCorrupted}건 손상 라인 제거, ${validLines.length}건 유지`);
+      try {
+        atomicWriteSync(filePath, validLines.join('\n') + '\n');
+        console.log(`[episode] ${teamId}: Self-healing — ${totalCorrupted}건 손상 라인 제거, ${validLines.length}건 유지`);
+      } catch (healErr) {
+        console.error(`[episode] ${teamId}: Self-healing write failed: ${healErr instanceof Error ? healErr.message : healErr}`);
+      }
     }
   }
 
