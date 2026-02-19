@@ -17,6 +17,7 @@ import { startInboxCompactor } from './inbox-compactor.js';
 import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
+import { verifyPRStatuses } from '../utils/github-status.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -551,14 +552,18 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
   }, env.workChannelId || env.memberTrackingChannelId);
 
-  // Leader startup message — notify channel and invoke leader for memory cleanup
+  // Leader startup message — verify actual state, then invoke leader for memory update
   const startupLeader = Object.values(config.teams).find(t => t.isLeader);
   const startupChannelId = env.workChannelId || env.memberTrackingChannelId;
   if (startupLeader && startupChannelId) {
     // Delay to ensure all bots are ready and background tasks initialized
     setTimeout(async () => {
       try {
-        // Read leader's short-term memory once for pending tasks & in-progress
+        // 1. Check actual GitHub PR statuses referenced in ALL team memories
+        const teamIds = Object.keys(config.teams);
+        const { report: prStatusReport } = await verifyPRStatuses(config.workspacePath, teamIds);
+
+        // 2. Read leader's short-term memory for pending tasks & in-progress
         const shortTermPath = path.resolve(config.workspacePath, '.mococo/memory', startupLeader.id, 'short-term.md');
         let pendingSummary = '';
         let inProgressSummary = '';
@@ -569,7 +574,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           if (pendingMatch) {
             const lines = pendingMatch[1].split('\n').filter(l => /^\s*-\s+.+/.test(l));
             if (lines.length > 0) {
-              pendingSummary = `\n\n**대기 항목 (${lines.length}건):**\n${lines.join('\n')}`;
+              pendingSummary = `\n\n**대기 항목 — 메모리 기준 (${lines.length}건):**\n${lines.join('\n')}`;
             }
           }
 
@@ -577,18 +582,25 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           if (progressMatch) {
             const lines = progressMatch[1].split('\n').filter(l => /^\s*-\s+.+/.test(l));
             if (lines.length > 0) {
-              inProgressSummary = `\n\n**진행중 작업 (${lines.length}건):**\n${lines.join('\n')}`;
+              inProgressSummary = `\n\n**진행중 작업 — 메모리 기준 (${lines.length}건):**\n${lines.join('\n')}`;
             }
           }
         } catch { /* no short-term memory yet */ }
 
         const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' });
-        const startupContent = `🔄 **시스템 재시작 완료** (${now} KST)${inProgressSummary}${pendingSummary}\n\n메모리 상태를 정리하겠습니다.`;
+        const startupContent = `🔄 **시스템 재시작 완료** (${now} KST)${prStatusReport}${inProgressSummary}${pendingSummary}\n\n실제 상태 기준으로 메모리를 정리하겠습니다.`;
+
+        // 3. Build system message with actual verified states
+        let systemContent = '[시스템 재시작] 봇이 재시작되었습니다.';
+        if (prStatusReport) {
+          systemContent += `\n\n아래는 GitHub API로 조회한 PR 실제 상태입니다. 메모리에 기록된 PR 상태와 비교하여, 실제 상태와 다른 항목은 메모리를 업데이트하세요.${prStatusReport}`;
+        }
+        systemContent += '\n\n메모리 상태를 실제 상태 기준으로 점검·업데이트한 후, 채널에 상태 정리 메시지를 출력하세요.';
 
         const systemMsg: ConversationMessage = {
           teamId: 'system',
           teamName: 'System',
-          content: `[시스템 재시작] 봇이 재시작되었습니다. 메모리 상태를 점검하고, 대기중 작업을 확인한 후, 채널에 상태 정리 메시지를 출력하세요.`,
+          content: systemContent,
           timestamp: new Date(),
           mentions: [startupLeader.id],
         };
@@ -598,7 +610,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         );
         addMessage(startupChannelId, systemMsg);
         handleTeamInvocation(startupLeader, systemMsg, startupChannelId, config, env, newChain());
-        console.log('[startup] Leader startup message sent and invocation triggered');
+        console.log('[startup] Leader startup message sent with verified PR statuses');
       } catch (err) {
         console.error(`[startup] Failed to send startup message: ${err}`);
       }
