@@ -349,6 +349,8 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   }, 2 * 60_000);
 
   // Forward hook events as team progress in Discord
+  // Remove previous listeners to prevent accumulation on repeated createBots() calls
+  hookEvents.removeAllListeners('any');
   hookEvents.on('any', async (event) => {
     const team = event.mococo_team ? config.teams[event.mococo_team as string] : null;
     if (!team) return;
