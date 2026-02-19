@@ -36,73 +36,88 @@ function readBody(req: http.IncomingMessage, res: http.ServerResponse): Promise<
 function verifyGitHubSignature(body: string, signature: string | undefined, secret: string): boolean {
   if (!signature) return false;
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expBuf);
 }
 
 export function startHookServer(port: number) {
   const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET || '';
 
+  if (!githubWebhookSecret) {
+    console.warn('[hook-receiver] GITHUB_WEBHOOK_SECRET not set — webhook signature verification disabled');
+  }
+
   const server = http.createServer(async (req, res) => {
-    if (req.method !== 'POST') {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
-
-    // ---- Claude Code hook endpoint ----
-    if (req.url === '/hook') {
-      const body = await readBody(req, res);
-      if (body === null) return; // aborted
-      try {
-        const event: HookEvent = JSON.parse(body);
-        hookEvents.emit('any', event);
-        hookEvents.emit(event.hook_event_name, event);
-      } catch {
-        // invalid JSON, ignore
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end('{"ok":true}');
-      return;
-    }
-
-    // ---- GitHub webhook endpoint ----
-    if (req.url === '/github') {
-      const body = await readBody(req, res);
-      if (body === null) return; // aborted
-
-      // Verify signature if secret is configured
-      if (githubWebhookSecret) {
-        const sig = req.headers['x-hub-signature-256'] as string | undefined;
-        if (!verifyGitHubSignature(body, sig, githubWebhookSecret)) {
-          console.warn('[hook-receiver] GitHub webhook signature mismatch');
-          res.writeHead(401);
-          res.end();
-          return;
-        }
-      }
-
-      const githubEvent = req.headers['x-github-event'] as string | undefined;
-      if (!githubEvent) {
-        res.writeHead(400);
+    try {
+      if (req.method !== 'POST') {
+        res.writeHead(404);
         res.end();
         return;
       }
 
-      try {
-        const payload = JSON.parse(body);
-        hookEvents.emit('github', { event: githubEvent, payload });
-        console.log(`[hook-receiver] GitHub event: ${githubEvent} (action: ${payload.action ?? 'n/a'})`);
-      } catch {
-        // invalid JSON
+      // ---- Claude Code hook endpoint ----
+      if (req.url === '/hook') {
+        const body = await readBody(req, res);
+        if (body === null) return; // aborted
+        try {
+          const event: HookEvent = JSON.parse(body);
+          hookEvents.emit('any', event);
+          hookEvents.emit(event.hook_event_name, event);
+        } catch {
+          // invalid JSON, ignore
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"ok":true}');
+        return;
       }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end('{"ok":true}');
-      return;
-    }
+      // ---- GitHub webhook endpoint ----
+      if (req.url === '/github') {
+        const body = await readBody(req, res);
+        if (body === null) return; // aborted
 
-    res.writeHead(404);
-    res.end();
+        // Verify signature if secret is configured
+        if (githubWebhookSecret) {
+          const sig = req.headers['x-hub-signature-256'] as string | undefined;
+          if (!verifyGitHubSignature(body, sig, githubWebhookSecret)) {
+            console.warn('[hook-receiver] GitHub webhook signature mismatch');
+            res.writeHead(401);
+            res.end();
+            return;
+          }
+        }
+
+        const githubEvent = req.headers['x-github-event'] as string | undefined;
+        if (!githubEvent) {
+          res.writeHead(400);
+          res.end();
+          return;
+        }
+
+        try {
+          const payload = JSON.parse(body);
+          hookEvents.emit('github', { event: githubEvent, payload });
+          console.log(`[hook-receiver] GitHub event: ${githubEvent} (action: ${payload.action ?? 'n/a'})`);
+        } catch {
+          // invalid JSON
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"ok":true}');
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    } catch (err) {
+      console.error('[hook-receiver] Unhandled error:', err);
+      if (!res.headersSent) {
+        res.writeHead(500);
+        res.end();
+      }
+    }
   });
 
   server.listen(port, () => {
