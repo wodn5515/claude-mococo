@@ -245,6 +245,21 @@ function updateMemberTracking(
 
 const registry = new ResourceRegistry();
 
+// Safety-net: strip any internal command blocks that should never reach Discord
+const INTERNAL_BLOCK_PATTERNS = [
+  /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}MEMORY-{3,}\s*\n[\s\S]*?\n-{3,}END-MEMORY-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}LONG-MEMORY-{3,}\s*\n[\s\S]*?\n-{3,}END-LONG-MEMORY-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}PERSONA-{3,}\s*\n[\s\S]*?\n-{3,}END-PERSONA-{3,}(?:\s*\n?```)?/g,
+];
+
+function sanitizeForDiscord(text: string): string {
+  let result = text;
+  for (const pattern of INTERNAL_BLOCK_PATTERNS) {
+    result = result.replace(pattern, '');
+  }
+  return result.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export async function sendAsTeam(channelId: string, team: TeamConfig, content: string): Promise<boolean> {
   const client = teamClients.get(team.id);
   if (!client) {
@@ -258,7 +273,10 @@ export async function sendAsTeam(channelId: string, team: TeamConfig, content: s
     return false;
   }
 
-  const chunks = splitMessage(content, 1900);
+  const sanitized = sanitizeForDiscord(content);
+  if (!sanitized) return true;
+
+  const chunks = splitMessage(sanitized, 1900);
   for (const chunk of chunks) {
     await channel.send(chunk);
   }
