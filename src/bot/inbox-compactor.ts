@@ -130,6 +130,26 @@ async function leaderHeartbeat(
     let improvementReport: string | null = null;
     try {
       const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+
+      // Clean up orphaned tmp file from previous crash (renameSync failure or process crash)
+      const tmpPath = improvementPath + '.tmp';
+      try {
+        const tmpStat = fs.statSync(tmpPath);
+        // Remove if older than 1 minute (not from an in-progress write)
+        if (Date.now() - tmpStat.mtimeMs > 60_000) {
+          fs.unlinkSync(tmpPath);
+          console.log('[heartbeat] Cleaned up orphaned improvement.json.tmp');
+        }
+      } catch {
+        // No tmp file — normal scenario
+      }
+
+      // Guard: after tmp cleanup, the original file may not exist (atomicWriteSync failure scenario)
+      if (!fs.existsSync(improvementPath)) {
+        // File absent — treat as empty state, skip improvement report
+        throw Object.assign(new Error('File not found after tmp cleanup'), { code: 'ENOENT' });
+      }
+
       const raw = fs.readFileSync(improvementPath, 'utf-8');
       if (!raw.trim()) throw Object.assign(new Error('Empty file'), { code: 'EMPTY' });
       let data: any;
@@ -141,7 +161,9 @@ async function leaderHeartbeat(
         try {
           atomicWriteSync(improvementPath, emptyData);
         } catch (writeErr) {
-          console.warn(`[heartbeat] Failed to recreate improvement.json: ${writeErr}`);
+          console.error(`[heartbeat] atomicWriteSync failed for ${improvementPath}: ${writeErr instanceof Error ? writeErr.message : writeErr}`);
+          // atomicWriteSync failure may leave orphaned .tmp — will be cleaned next cycle
+          data = { issues: [] };
         }
         data = { issues: [] };
       }

@@ -13,6 +13,20 @@ const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'dist', 'build']);
 const EXCLUDED_PATTERNS = [/\.lock$/];
 const EXCLUDED_REPOS = new Set(['atom.io']);
 
+/**
+ * Normalize repo name for consistent comparison.
+ * JSON.stringify escaping (e.g., backslashes, quotes) and raw names
+ * should resolve to the same value.
+ */
+function normalizeRepoName(name: string): string {
+  // Try to unescape JSON-escaped strings, fall back to original
+  try {
+    return JSON.parse(`"${name}"`);
+  } catch {
+    return name;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Git helper -- run git command via spawn
 // ---------------------------------------------------------------------------
@@ -215,7 +229,8 @@ function buildScanPrompt(
   // 기존 이슈 목록을 프롬프트에 포함 — 이미 보고된 이슈는 재보고 방지
   let existingIssuesSection = '';
   if (existingIssues && existingIssues.length > 0) {
-    const repoIssues = existingIssues.filter(i => i.repo === repoName);
+    // repo 필드 비교 시 일관된 정규화 적용 (raw name 또는 JSON-escaped name 모두 매칭)
+    const repoIssues = existingIssues.filter(i => normalizeRepoName(i.repo) === normalizeRepoName(repoName));
     if (repoIssues.length > 0) {
       const issueList = repoIssues
         .map(i => `- [${i.severity}] ${JSON.stringify(i.file).slice(1, -1)}: ${i.type} — ${i.description.slice(0, 100)}`)
@@ -495,7 +510,7 @@ const NOTIFICATION_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 let lastNotificationTime = 0;
 
 function issueKey(issue: { file: string; repo: string; type: string; description: string }): string {
-  return `${issue.repo}::${issue.file}::${issue.type}::${issue.description}`;
+  return `${normalizeRepoName(issue.repo)}::${issue.file}::${issue.type}::${issue.description}`;
 }
 
 /**
