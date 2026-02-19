@@ -366,8 +366,12 @@ export async function buildTeamPrompt(
   const ws = config.workspacePath;
   const chId = invocation.channelId;
 
-  // 1. Load base resources
-  const template = fs.readFileSync(path.resolve(ws, team.prompt), 'utf-8');
+  // 1. Load base resources (with path traversal guard)
+  const templatePath = path.resolve(ws, team.prompt);
+  if (!templatePath.startsWith(ws + path.sep) && templatePath !== ws) {
+    throw new Error(`[prompt-builder] Path traversal detected: team.prompt "${team.prompt}" resolves outside workspace`);
+  }
+  const template = fs.readFileSync(templatePath, 'utf-8');
   const conversationText = formatConversation(invocation.conversation);
   const sharedRules = readCached(path.resolve(ws, 'prompts/shared-rules.md'));
   const memberList = readCached(path.resolve(ws, '.mococo/members.md'));

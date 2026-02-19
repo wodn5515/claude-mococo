@@ -115,7 +115,13 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
 
 export function clearInbox(teamId: string, workspacePath: string) {
   const file = path.resolve(workspacePath, '.mococo/inbox', `${teamId}.md`);
-  try { fs.unlinkSync(file); } catch {}
+  try {
+    fs.unlinkSync(file);
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      console.error(`[clearInbox] Failed to delete ${file}:`, err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +321,13 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 
   // 주기적 정리: 2분마다 만료 항목 전체 제거
   // Runs for entire process lifetime — no cleanup needed
-  setInterval(() => cleanupExpiredEntries(), 2 * 60_000);
+  setInterval(() => {
+    try {
+      cleanupExpiredEntries();
+    } catch (err) {
+      console.error('[processedMsgIds] Periodic cleanup failed:', err);
+    }
+  }, 2 * 60_000);
 
   // Forward hook events as team progress in Discord
   hookEvents.on('any', async (event) => {
@@ -632,7 +644,11 @@ function resetTeamMemory(teamId: string, workspacePath: string): string[] {
         fs.unlinkSync(filePath);
         cleared.push(file);
       }
-    } catch {}
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') {
+        console.error(`[resetTeamMemory] Failed to delete ${filePath}:`, err);
+      }
+    }
   }
 
   return cleared;

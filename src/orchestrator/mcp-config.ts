@@ -20,7 +20,9 @@ export function cleanupMcpConfig(teamId: string, cwd: string): void {
   const filePath = path.resolve(cwd, '.mococo', 'mcp', `${teamId}.json`);
   try {
     fs.unlinkSync(filePath);
-  } catch {
-    // already removed — ignore
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      console.error(`[cleanupMcpConfig] Failed to delete ${filePath}:`, err);
+    }
   }
 }
