@@ -93,7 +93,7 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
           const file = path.resolve(dir, `${teamId}.md`);
           const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
           // Flatten multi-line content into single line to prevent summarizeInbox parse failures
-          const flat = content.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ');
+          const flat = content.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ');
           await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${flat}\n`);
           if (settled) return;
           settled = true;
