@@ -23,7 +23,6 @@ const HEARTBEAT_MS = 10 * 60_000;       // 10 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
-const HR_EVAL_MS = 2 * 60 * 60_000; // 2 hours
 
 type InvocationHandler = (
   team: TeamConfig,
@@ -371,88 +370,6 @@ async function dailyDigest(
 }
 
 // ---------------------------------------------------------------------------
-// HR evaluation loop — periodic team member performance evaluation
-// ---------------------------------------------------------------------------
-
-async function hrEvaluationLoop(
-  config: TeamsConfig,
-  env: EnvConfig,
-  triggerInvocation: InvocationHandler,
-): Promise<void> {
-  try {
-    const hrTeam = Object.values(config.teams).find(t => t.id === 'hr');
-    if (!hrTeam) return;
-    if (isOccupied(hrTeam.id)) {
-      console.log('[hr-eval] HR team busy/queued, skipping this cycle');
-      return;
-    }
-
-    const channelId = env.workChannelId || env.memberTrackingChannelId;
-    if (!channelId) {
-      console.warn('[hr-eval] No workChannelId or memberTrackingChannelId configured');
-      return;
-    }
-
-    // Read and clear activity log (atomic rename to prevent data loss)
-    const logFile = path.resolve(config.workspacePath, '.mococo/hr-logs/activity-log.jsonl');
-    const tmpFile = logFile + '.processing';
-    let activityLog = '';
-    try {
-      fs.renameSync(logFile, tmpFile);
-      activityLog = fs.readFileSync(tmpFile, 'utf-8').trim();
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch (unlinkErr) {
-        console.warn(`[hr-eval] Failed to clean up temp file ${tmpFile}: ${unlinkErr}`);
-      }
-    } catch {
-      // File doesn't exist or empty — no activity
-      // Also clean up stale temp file from previous failed run
-      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-    }
-
-    if (!activityLog) {
-      console.log('[hr-eval] No activity log entries, skipping evaluation');
-      return;
-    }
-
-    // Parse and format log entries for the prompt
-    const entries = activityLog.split('\n').filter(Boolean);
-    const formattedLines: string[] = [];
-    for (const line of entries) {
-      try {
-        const e = JSON.parse(line) as { ts: number; channelId: string; author: string; teamId: string; content: string };
-        const time = new Date(e.ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-        formattedLines.push(`[${time}] ${e.author}: ${e.content}`);
-      } catch {
-        // Skip malformed lines
-      }
-    }
-
-    const fromTime = new Date(Date.now() - HR_EVAL_MS).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-    const toTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-
-    const MAX_LOG_LINES = 200;
-    const trimmedLines = formattedLines.length > MAX_LOG_LINES ? formattedLines.slice(-MAX_LOG_LINES) : formattedLines;
-    const logSummary = trimmedLines.join('\n');
-    const systemMsg: ConversationMessage = {
-      teamId: 'system',
-      teamName: 'System',
-      content: `[정기 업무평가] 최근 활동 기간(${fromTime}~${toTime}) 로그를 기반으로 각 모코코 팀원의 업무 활동을 평가하고, 회장님(<@401573048353816587>)께 보고하세요.\n\n--- 활동 로그 ---\n${logSummary}\n--- 로그 끝 ---\n\n평가 항목: 작업량, 품질, 협업, 자율성. 로그에 기록이 없는 팀원은 "활동 없음"으로 표시하세요.`,
-      timestamp: new Date(),
-      mentions: [hrTeam.id],
-    };
-    addMessage(channelId, systemMsg);
-    await sendAsTeam(channelId, hrTeam, `📋 [정기 업무평가] ${fromTime}~${toTime} 활동 로그 기반 평가를 시작합니다.`).catch(err => console.warn('[hr-eval] sendAsTeam failed:', err instanceof Error ? err.message : err));
-    triggerInvocation(hrTeam, systemMsg, channelId, config, env, newChain());
-
-    console.log(`[hr-eval] HR evaluation triggered with ${entries.length} log entries for period ${fromTime}~${toTime}`);
-  } catch (err) {
-    console.error(`[hr-eval] Error: ${err}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Pending task loop — check short-term memory for 대기 항목
 // ---------------------------------------------------------------------------
 
@@ -581,7 +498,7 @@ export function startInboxCompactor(
   env: EnvConfig,
   triggerInvocation: InvocationHandler,
 ): void {
-  console.log('[inbox-compactor] Started: fs.watch(immediate) + heartbeat(10m/fallback) + follow-up(2m) + pending(60s) + digest(24h) + hr-eval(2h)');
+  console.log('[inbox-compactor] Started: fs.watch(immediate) + heartbeat(10m/fallback) + follow-up(2m) + pending(60s) + digest(24h)');
 
   const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
   if (!leaderTeam) {
@@ -677,19 +594,4 @@ export function startInboxCompactor(
       });
     }, DAILY_DIGEST_MS));
   }, 60 * 60_000));
-
-  // HR evaluation loop: every 2 hours (first run after 10 minutes)
-  const hrTeamCheck = Object.values(config.teams).find(t => t.id === 'hr');
-  if (hrTeamCheck) {
-    activeTimers.push(setTimeout(() => {
-      hrEvaluationLoop(config, env, triggerInvocation).catch(err => {
-        console.error(`[hr-eval] Unhandled error: ${err}`);
-      });
-      activeTimers.push(setInterval(() => {
-        hrEvaluationLoop(config, env, triggerInvocation).catch(err => {
-          console.error(`[hr-eval] Unhandled error: ${err}`);
-        });
-      }, HR_EVAL_MS));
-    }, 10 * 60_000)); // First run after 10 minutes
-  }
 }
