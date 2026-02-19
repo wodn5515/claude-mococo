@@ -16,6 +16,7 @@ import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './d
 import { startInboxCompactor } from './inbox-compactor.js';
 import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
+import { startGitHubReviewCycle } from './github-review-cycle.js';
 import { writeEpisode } from './episode-writer.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
@@ -579,6 +580,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     addMessage(channelId, triggerMsg);
     handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
   }, env.workChannelId || env.memberTrackingChannelId);
+  startGitHubReviewCycle(config, env, handleTeamInvocation, newChain);
 
   // Leader startup message — notify channel and invoke leader for memory cleanup
   const startupLeader = Object.values(config.teams).find(t => t.isLeader);
