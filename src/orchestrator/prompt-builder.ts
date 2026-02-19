@@ -217,8 +217,8 @@ Use these sections to organize:
 
 ### 팀 역량
 예시:
-- BE코코: API 설계, DB 마이그레이션, 성능 최적화
-- FE코코: React, 배포 파이프라인, UI/UX
+- Backend팀: API 설계, DB 마이그레이션, 성능 최적화
+- Frontend팀: React, 배포 파이프라인, UI/UX
 
 ${longTerm ? `\n${longTerm}\n` : '\n(empty)\n'}
 ## Short-term Memory
@@ -229,13 +229,13 @@ Use these sections to organize:
 (현재 태스크, 담당자, 블로커 — 반드시 #ch:숫자ID 포함)
 예시:
 - FE 배포 스크립트 작성 중 #ch:${chId}
-- BE코코에게 API 연동 위임, 결과 대기 #ch:${chId}
+- 팀원A에게 API 연동 위임, 결과 대기 #ch:${chId}
 
 ### 대기 항목
 (미완료 작업 — 반드시 #ch:숫자ID 포함. 태그: [BLOCKED], [SCHEDULED:YYYY-MM-DD], [READY])
 예시:
 - DB 마이그레이션 실행 #ch:1234567890123456
-- Redis 설정 [BLOCKED] — BE코코 완료 대기 #ch:1234567890123456
+- Redis 설정 [BLOCKED] — 팀원A 완료 대기 #ch:1234567890123456
 - 주간보고 작성 [SCHEDULED:2026-02-17] #ch:9876543210123456
 
 ### 캐시된 외부 데이터
@@ -260,7 +260,7 @@ Levels:
 - \`propose\` — 새 기능, 아키텍처 변경, 새 도구 도입. 회장님 승인 대기.
 - \`escalate\` — 보안, 장애, 긴급. 즉시 회장님 태그.
 
-예: \`[decision:autonomous reason="중복 코드 발견" action="BE코코에게 리팩토링 지시"]\`
+예: \`[decision:autonomous reason="중복 코드 발견" action="Backend팀에게 리팩토링 지시"]\`
 예: \`[decision:propose reason="새 인증 시스템 필요" action="회장님 승인 대기"]\`
 `;
 
