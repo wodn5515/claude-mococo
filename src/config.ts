@@ -11,7 +11,6 @@ const AVATAR_MAP: Record<string, string> = {
   eye: 'https://em-content.zobj.net/source/apple/391/eye_1f441-fe0f.png',
   robot: 'https://em-content.zobj.net/source/apple/391/robot_1f916.png',
   test: 'https://em-content.zobj.net/source/apple/391/test-tube_1f9ea.png',
-  book: 'https://em-content.zobj.net/source/apple/391/books_1f4da.png',
 };
 
 export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsConfig {
