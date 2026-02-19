@@ -49,11 +49,26 @@ function readCached(filePath: string): string {
 function summarizeInbox(raw: string, teamId: string): string {
   if (!raw) return '';
 
-  const lines = raw.split('\n').filter(l => l.trim());
+  const lines = raw.split('\n');
+
+  // Merge continuation lines (lines not starting with '[') into the preceding entry.
+  // Multi-line Discord messages written before the appendToInbox flatten fix
+  // would produce orphan lines that fail the per-line regex.
+  const merged: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (/^\[/.test(line)) {
+      merged.push(line);
+    } else if (merged.length > 0) {
+      merged[merged.length - 1] += ' ' + line.trim();
+    } else {
+      merged.push(line);
+    }
+  }
 
   // Parse into entries (each line is "[timestamp] sender: content")
   const failedLines: string[] = [];
-  const entries = lines.map(line => {
+  const entries = merged.map(line => {
     const match = line.match(/^\[([^\]]+)\]\s+([^:]+):\s*([\s\S]*)$/);
     if (!match) {
       failedLines.push(line);
@@ -70,11 +85,11 @@ function summarizeInbox(raw: string, teamId: string): string {
     const sample = failedLines.length <= 3
       ? failedLines.map(l => l.slice(0, 80)).join('; ')
       : failedLines.slice(0, 3).map(l => l.slice(0, 80)).join('; ') + '...';
-    const failRatio = failedLines.length / lines.length;
+    const failRatio = failedLines.length / merged.length;
     if (failRatio > 0.5) {
-      console.error(`[summarizeInbox] ${teamId}: ${failedLines.length}/${lines.length}건 파싱 실패 (${(failRatio * 100).toFixed(0)}% — 과반 이상) — ${sample}`);
+      console.error(`[summarizeInbox] ${teamId}: ${failedLines.length}/${merged.length}건 파싱 실패 (${(failRatio * 100).toFixed(0)}% — 과반 이상) — ${sample}`);
     } else {
-      console.warn(`[summarizeInbox] ${teamId}: ${failedLines.length}/${lines.length}건 파싱 실패 — ${sample}`);
+      console.warn(`[summarizeInbox] ${teamId}: ${failedLines.length}/${merged.length}건 파싱 실패 — ${sample}`);
     }
   }
 
