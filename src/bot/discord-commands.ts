@@ -309,6 +309,17 @@ async function executeCommand(cmd: ParsedCommand, ctx: CommandContext): Promise<
 
 // --- Resolve helpers ---
 
+/** Validate Discord snowflake format (17-20 digit numeric string) */
+function isValidSnowflake(id: string): boolean {
+  return /^\d{17,20}$/.test(id);
+}
+
+/** Strip Discord mention syntax and validate as snowflake */
+function parseUserId(raw: string): string | null {
+  const cleaned = raw.replace(/[<@!>]/g, '');
+  return isValidSnowflake(cleaned) ? cleaned : null;
+}
+
 function resolveChannel(name: string, ctx: CommandContext): TextChannel | undefined {
   // Check registry first
   const id = ctx.registry.getChannel(name);
@@ -652,7 +663,12 @@ async function handleSetPermission(params: Record<string, string>, ctx: CommandC
       return;
     }
   } else if (params.user) {
-    targetId = params.user.replace(/[<@!>]/g, '');
+    const parsed = parseUserId(params.user);
+    if (!parsed) {
+      console.warn(`[discord-cmd] Invalid user ID format: "${params.user}"`);
+      return;
+    }
+    targetId = parsed;
   }
   if (!targetId) return;
 
@@ -683,7 +699,12 @@ async function handleRemovePermission(params: Record<string, string>, ctx: Comma
     const role = resolveRole(params.role, ctx);
     targetId = role?.id;
   } else if (params.user) {
-    targetId = params.user.replace(/[<@!>]/g, '');
+    const parsed = parseUserId(params.user);
+    if (!parsed) {
+      console.warn(`[discord-cmd] Invalid user ID format: "${params.user}"`);
+      return;
+    }
+    targetId = parsed;
   }
   if (!targetId) return;
 
@@ -732,7 +753,11 @@ async function handleAssignRole(params: Record<string, string>, ctx: CommandCont
   }
 
   // Accept raw ID or <@ID> mention format
-  const cleanId = userId.replace(/[<@!>]/g, '');
+  const cleanId = parseUserId(userId);
+  if (!cleanId) {
+    console.warn(`[discord-cmd] Invalid user ID format: "${userId}"`);
+    return;
+  }
   const member = await ctx.guild.members.fetch(cleanId).catch(() => null);
   if (!member) {
     console.warn(`[discord-cmd] Member "${userId}" not found`);
@@ -754,7 +779,11 @@ async function handleRemoveRole(params: Record<string, string>, ctx: CommandCont
     return;
   }
 
-  const cleanId = userId.replace(/[<@!>]/g, '');
+  const cleanId = parseUserId(userId);
+  if (!cleanId) {
+    console.warn(`[discord-cmd] Invalid user ID format: "${userId}"`);
+    return;
+  }
   const member = await ctx.guild.members.fetch(cleanId).catch(() => null);
   if (!member) {
     console.warn(`[discord-cmd] Member "${userId}" not found`);
@@ -868,6 +897,10 @@ async function handleEditPersona(params: Record<string, string>, ctx: CommandCon
   if (!content) return;
 
   const promptPath = path.resolve(ctx.config.workspacePath, ctx.team.prompt);
+  if (!promptPath.startsWith(ctx.config.workspacePath + path.sep)) {
+    console.error(`[discord-cmd] Path traversal detected in persona path: "${ctx.team.prompt}"`);
+    return;
+  }
   fs.writeFileSync(promptPath, content);
   console.log(`[discord-cmd] Updated persona for ${ctx.team.name} at ${ctx.team.prompt}`);
   await ctx.sendAsTeam(ctx.channelId, ctx.team, `Persona updated.`);
