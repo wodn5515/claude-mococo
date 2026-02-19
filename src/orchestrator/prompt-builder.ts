@@ -51,19 +51,19 @@ function summarizeInbox(raw: string, teamId: string): string {
 
   const lines = raw.split('\n');
 
-  // Merge continuation lines (lines not starting with '[') into the preceding entry.
-  // Multi-line Discord messages written before the appendToInbox flatten fix
-  // would produce orphan lines that fail the per-line regex.
+  // Merge continuation lines into the preceding entry.
+  // A new entry starts with a timestamp pattern like "[2026-02-19 02:40 #ch:..."
+  // Using specific pattern avoids false splits on markdown links like "[text](url)".
+  const ENTRY_START = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
   const merged: string[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
-    if (/^\[/.test(line)) {
+    if (ENTRY_START.test(line)) {
       merged.push(line);
     } else if (merged.length > 0) {
       merged[merged.length - 1] += ' ' + line.trim();
-    } else {
-      merged.push(line);
     }
+    // Orphan lines before any entry are dropped (no valid timestamp prefix)
   }
 
   // Parse into entries (each line is "[timestamp] sender: content")
