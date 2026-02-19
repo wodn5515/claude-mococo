@@ -35,12 +35,7 @@ export class GeminiEngine extends BaseEngine {
     });
 
     this.proc.on('error', (err) => {
-      console.error(`[gemini:${this.opts.teamId}] spawn error: ${err.message}`);
-      this.emit('exit', 1);
-    });
-
-    this.proc.on('error', (err) => {
-      console.error(`[GeminiEngine] process error: ${err.message}`);
+      console.error(`[gemini:${this.opts.teamId}] process error: ${err.message}`);
       this.emit('result', { type: 'result', result: `[GeminiEngine] process error: ${err.message}`, total_cost_usd: 0 });
       this.emit('exit', 1);
     });
