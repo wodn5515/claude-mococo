@@ -19,7 +19,7 @@ function isOccupied(teamId: string): boolean {
 
 const PENDING_TASK_INTERVAL_MS = 60_000;
 const DEBOUNCE_MS = 2_000;
-const HEARTBEAT_MS = 10 * 60_000;       // 10 minutes
+const HEARTBEAT_MS = 3 * 60_000;        // 3 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
@@ -498,7 +498,7 @@ export function startInboxCompactor(
   env: EnvConfig,
   triggerInvocation: InvocationHandler,
 ): void {
-  console.log('[inbox-compactor] Started: fs.watch(immediate) + heartbeat(10m/fallback) + follow-up(2m) + pending(60s) + digest(24h)');
+  console.log('[inbox-compactor] Started: fs.watch(immediate) + queue-drain(15s) + heartbeat(3m/fallback) + follow-up(2m) + pending(60s) + digest(24h)');
 
   const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
   if (!leaderTeam) {
@@ -511,6 +511,7 @@ export function startInboxCompactor(
   fs.mkdirSync(inboxDir, { recursive: true });
 
   let debounceTimer: NodeJS.Timeout | null = null;
+  let pendingInboxInvoke = false;
 
   const executeHeartbeat = () => {
     leaderHeartbeat(config, env, triggerInvocation).catch(err => {
@@ -521,10 +522,12 @@ export function startInboxCompactor(
   // fs.watch for immediate inbox change detection — A안: bypass haiku triage
   const immediateLeaderInvoke = async () => {
     if (isOccupied(leaderTeam.id)) {
-      console.log('[inbox-compactor] Leader busy/queued, skipping immediate invoke');
+      console.log('[inbox-compactor] Leader busy/queued, queueing inbox invoke');
+      pendingInboxInvoke = true;
       return;
     }
 
+    pendingInboxInvoke = false;
     const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
     let inbox = '';
     try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
@@ -566,8 +569,16 @@ export function startInboxCompactor(
     console.error(`[inbox-compactor] Failed to watch inbox directory: ${err}`);
   }
 
-  // Leader heartbeat: periodic check every 10 minutes
+  // Leader heartbeat: periodic check every 3 minutes
   activeTimers.push(setInterval(executeHeartbeat, HEARTBEAT_MS));
+
+  // Queue drain: retry pending inbox invoke every 15 seconds when leader was busy
+  activeTimers.push(setInterval(() => {
+    if (!pendingInboxInvoke) return;
+    immediateLeaderInvoke().catch(err => {
+      console.error(`[inbox-compactor] Queue drain error: ${err}`);
+    });
+  }, 15_000));
 
   // Follow-up loop: check dispatch ledger every 2 minutes
   activeTimers.push(setInterval(() => {
