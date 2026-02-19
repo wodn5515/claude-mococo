@@ -46,6 +46,10 @@ export function startHookServer(port: number) {
     });
   });
 
+  server.on('error', (err) => {
+    console.error(`[hook-receiver] Server error:`, err);
+  });
+
   server.listen(port, () => {
     console.log(`Hook receiver listening on :${port}`);
   });

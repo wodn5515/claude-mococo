@@ -64,7 +64,7 @@ async function processInboxWriteQueue() {
     isProcessingInboxQueue = false;
     // drain 완료 후 새 항목이 추가되었는지 확인하여 재처리
     if (inboxQueueHead < inboxWriteQueue.length) {
-      processInboxWriteQueue();
+      processInboxWriteQueue().catch(err => console.error('[inbox-queue] Drain error:', err));
     } else {
       // 완전히 비었을 때만 참조 해제
       inboxWriteQueue.length = 0;
@@ -110,7 +110,7 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
     };
 
     inboxWriteQueue.push(task);
-    processInboxWriteQueue();
+    processInboxWriteQueue().catch(err => console.error('[inbox-queue] Queue error:', err));
   });
 }
 
@@ -352,13 +352,17 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   // Remove previous listeners to prevent accumulation on repeated createBots() calls
   hookEvents.removeAllListeners('any');
   hookEvents.on('any', async (event) => {
-    const team = event.mococo_team ? config.teams[event.mococo_team as string] : null;
-    if (!team) return;
+    try {
+      const team = event.mococo_team ? config.teams[event.mococo_team as string] : null;
+      if (!team) return;
 
-    if (event.hook_event_name === 'SubagentCompleted' && env.workChannelId) {
-      await sendAsTeam(env.workChannelId, team,
-        `Subtask done: **${event.task_subject ?? 'unknown'}** (${(event.teammate_name as string) ?? 'lead'})`
-      ).catch(err => console.warn('[hook-events] sendAsTeam failed:', err instanceof Error ? err.message : err));
+      if (event.hook_event_name === 'SubagentCompleted' && env.workChannelId) {
+        await sendAsTeam(env.workChannelId, team,
+          `Subtask done: **${event.task_subject ?? 'unknown'}** (${(event.teammate_name as string) ?? 'lead'})`
+        ).catch(err => console.warn('[hook-events] sendAsTeam failed:', err instanceof Error ? err.message : err));
+      }
+    } catch (err) {
+      console.error('[hook-events] Unexpected error:', err);
     }
   });
 
@@ -440,61 +444,69 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 
     // Handle /reset slash command interaction
     client.on('interactionCreate', async (interaction) => {
-      if (!interaction.isChatInputCommand()) return;
-      if (interaction.commandName !== 'reset') return;
+      try {
+        if (!interaction.isChatInputCommand()) return;
+        if (interaction.commandName !== 'reset') return;
 
-      // Permission check: humanDiscordId only
-      if (config.humanDiscordId && interaction.user.id !== config.humanDiscordId) {
-        await interaction.reply({ content: '메모리 초기화는 회장님만 실행할 수 있습니다.', ephemeral: true });
-        return;
-      }
-
-      if (team.isLeader) {
-        const target = interaction.options.getString('team') ?? 'all';
-
-        if (target === 'all') {
-          const results: string[] = [];
-          for (const t of Object.values(config.teams)) {
-            const cleared = resetTeamMemory(t.id, config.workspacePath);
-            results.push(`**${t.name}**: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(비어있음)'}`);
-          }
-          await interaction.reply(`전체 팀 메모리 초기화 완료:\n${results.join('\n')}`);
-        } else {
-          const t = config.teams[target];
-          if (!t) {
-            await interaction.reply({ content: `팀을 찾을 수 없습니다: ${target}`, ephemeral: true });
-            return;
-          }
-          const cleared = resetTeamMemory(t.id, config.workspacePath);
-          await interaction.reply(`**${t.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+        // Permission check: humanDiscordId only
+        if (config.humanDiscordId && interaction.user.id !== config.humanDiscordId) {
+          await interaction.reply({ content: '메모리 초기화는 회장님만 실행할 수 있습니다.', ephemeral: true });
+          return;
         }
-      } else {
-        // Non-leader: reset own memory
-        const cleared = resetTeamMemory(team.id, config.workspacePath);
-        await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+
+        if (team.isLeader) {
+          const target = interaction.options.getString('team') ?? 'all';
+
+          if (target === 'all') {
+            const results: string[] = [];
+            for (const t of Object.values(config.teams)) {
+              const cleared = resetTeamMemory(t.id, config.workspacePath);
+              results.push(`**${t.name}**: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(비어있음)'}`);
+            }
+            await interaction.reply(`전체 팀 메모리 초기화 완료:\n${results.join('\n')}`);
+          } else {
+            const t = config.teams[target];
+            if (!t) {
+              await interaction.reply({ content: `팀을 찾을 수 없습니다: ${target}`, ephemeral: true });
+              return;
+            }
+            const cleared = resetTeamMemory(t.id, config.workspacePath);
+            await interaction.reply(`**${t.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+          }
+        } else {
+          // Non-leader: reset own memory
+          const cleared = resetTeamMemory(team.id, config.workspacePath);
+          await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+        }
+      } catch (err) {
+        console.error(`[${team.name}] interactionCreate error:`, err);
       }
     });
 
     // Member join/leave tracking (leader only)
     if (team.isLeader && env.memberTrackingChannelId) {
       client.on('guildMemberAdd', async (member: GuildMember) => {
-        updateMemberTracking('join', member, config.workspacePath);
+        try {
+          updateMemberTracking('join', member, config.workspacePath);
 
-        const isMococo = Object.values(config.teams).some(
-          t => t.discordUserId === member.id,
-        );
-        if (isMococo) {
-          const channelId = env.memberTrackingChannelId!;
-          const displayName = member.displayName || member.user.username;
-          const triggerMsg: ConversationMessage = {
-            teamId: 'system',
-            teamName: 'System',
-            content: `[신규 모코코 입장] ${displayName} (<@${member.id}>) 님이 서버에 참가했습니다. 환영 인사를 진행해주세요.`,
-            timestamp: new Date(),
-            mentions: [team.id],
-          };
-          addMessage(channelId, triggerMsg);
-          handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
+          const isMococo = Object.values(config.teams).some(
+            t => t.discordUserId === member.id,
+          );
+          if (isMococo) {
+            const channelId = env.memberTrackingChannelId!;
+            const displayName = member.displayName || member.user.username;
+            const triggerMsg: ConversationMessage = {
+              teamId: 'system',
+              teamName: 'System',
+              content: `[신규 모코코 입장] ${displayName} (<@${member.id}>) 님이 서버에 참가했습니다. 환영 인사를 진행해주세요.`,
+              timestamp: new Date(),
+              mentions: [team.id],
+            };
+            addMessage(channelId, triggerMsg);
+            handleTeamInvocation(team, triggerMsg, channelId, config, env, newChain());
+          }
+        } catch (err) {
+          console.error(`[${team.name}] guildMemberAdd error:`, err);
         }
       });
 
@@ -505,70 +517,79 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
 
     // Message handler
     client.on('messageCreate', async (msg: Message) => {
-      if (team.channels && team.channels.length > 0 && !team.channels.includes(msg.channelId)) return;
-      if (botUserIds.has(msg.author.id)) return;
-      if (msg.author.bot) return;
+      try {
+        if (team.channels && team.channels.length > 0 && !team.channels.includes(msg.channelId)) return;
+        if (botUserIds.has(msg.author.id)) return;
+        if (msg.author.bot) return;
 
-      const content = msg.content.trim();
-      if (!content) return;
+        const content = msg.content.trim();
+        if (!content) return;
 
-      if (team.isLeader) {
-        if (await handleAdminCommand(content, msg, config)) return;
+        if (team.isLeader) {
+          if (await handleAdminCommand(content, msg, config)) return;
 
-        const mentionsOtherBot = Object.values(config.teams).some(t =>
-          !t.isLeader && t.discordUserId && msg.mentions.users.has(t.discordUserId)
-        );
+          const mentionsOtherBot = Object.values(config.teams).some(t =>
+            !t.isLeader && t.discordUserId && msg.mentions.users.has(t.discordUserId)
+          );
 
-        const humanMsg: ConversationMessage = {
-          teamId: 'human',
-          teamName: msg.author.displayName,
-          discordId: msg.author.id,
-          content,
-          timestamp: new Date(),
-          mentions: findMentionedTeams(content, config).map(t => t.id),
-        };
-        if (!processedMsgIds.has(msg.id)) {
-          processedMsgIds.set(msg.id, Date.now());
-          evictOldestIfNeeded();
-          addMessage(msg.channelId, humanMsg);
+          const humanMsg: ConversationMessage = {
+            teamId: 'human',
+            teamName: msg.author.displayName,
+            discordId: msg.author.id,
+            content,
+            timestamp: new Date(),
+            mentions: findMentionedTeams(content, config).map(t => t.id),
+          };
+          if (!processedMsgIds.has(msg.id)) {
+            processedMsgIds.set(msg.id, Date.now());
+            evictOldestIfNeeded();
+            addMessage(msg.channelId, humanMsg);
+          }
+
+          // Leader reads every message — append to inbox for memory processing
+          // Skip inbox when human directly mentions non-leader bots (direct command, no leader relay needed)
+          const isHumanDirectToNonLeader = msg.author.id === config.humanDiscordId && mentionsOtherBot;
+          if (!isHumanDirectToNonLeader) {
+            await appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId).catch(() => {});
+          }
+
+          if (mentionsOtherBot) return;
+
+          const targetTeams = routeMessage(content, true, config);
+          const chain = newChain();
+          for (const target of targetTeams) {
+            handleTeamInvocation(target, humanMsg, msg.channelId, config, env, chain);
+          }
         }
-
-        // Leader reads every message — append to inbox for memory processing
-        // Skip inbox when human directly mentions non-leader bots (direct command, no leader relay needed)
-        const isHumanDirectToNonLeader = msg.author.id === config.humanDiscordId && mentionsOtherBot;
-        if (!isHumanDirectToNonLeader) {
-          await appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId).catch(() => {});
+        // Non-leader bots: only respond if this bot is @mentioned in Discord
+        else if (msg.mentions.users.has(client.user?.id ?? '')) {
+          const humanMsg: ConversationMessage = {
+            teamId: 'human',
+            teamName: msg.author.displayName,
+            discordId: msg.author.id,
+            content,
+            timestamp: new Date(),
+            mentions: [team.id],
+          };
+          if (!processedMsgIds.has(msg.id)) {
+            processedMsgIds.set(msg.id, Date.now());
+            evictOldestIfNeeded();
+            addMessage(msg.channelId, humanMsg);
+          }
+          handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());
         }
-
-        if (mentionsOtherBot) return;
-
-        const targetTeams = routeMessage(content, true, config);
-        const chain = newChain();
-        for (const target of targetTeams) {
-          handleTeamInvocation(target, humanMsg, msg.channelId, config, env, chain);
-        }
-      }
-      // Non-leader bots: only respond if this bot is @mentioned in Discord
-      else if (msg.mentions.users.has(client.user?.id ?? '')) {
-        const humanMsg: ConversationMessage = {
-          teamId: 'human',
-          teamName: msg.author.displayName,
-          discordId: msg.author.id,
-          content,
-          timestamp: new Date(),
-          mentions: [team.id],
-        };
-        if (!processedMsgIds.has(msg.id)) {
-          processedMsgIds.set(msg.id, Date.now());
-          evictOldestIfNeeded();
-          addMessage(msg.channelId, humanMsg);
-        }
-        handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());
+      } catch (err) {
+        console.error(`[${team.name}] messageCreate error:`, err);
       }
     });
 
     teamClients.set(team.id, client);
-    await client.login(team.discordToken);
+    try {
+      await client.login(team.discordToken);
+    } catch (err) {
+      console.error(`[${team.name}] Login failed:`, err);
+      teamClients.delete(team.id);
+    }
   }
 
   // Start periodic background tasks
