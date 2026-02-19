@@ -162,32 +162,29 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
     }
   }
 
-  // 손상된 라인이 있으면 요약 로그 출력
+  // Self-healing: 손상된 라인이 1건이라도 있으면 즉시 제거 + 재분류
   if (malformedCount > 0) {
-    console.warn(`[memory-consolidator] ${teamName}: ${malformedCount}건의 손상된 에피소드 라인 스킵됨 (전체 ${lines.length}건 중)`);
-    // Self-healing: 손상 비율 30% 이상이면 유효한 라인만 유지
-    if (malformedCount / lines.length >= 0.3) {
-      const validLines = lines.filter(l => { try { JSON.parse(l); return true; } catch { return false; } });
+    console.warn(`[memory-consolidator] ${teamName}: ${malformedCount}건의 손상된 에피소드 라인 발견 (전체 ${lines.length}건 중)`);
+    const validLines = lines.filter(l => { try { JSON.parse(l); return true; } catch { return false; } });
+    try {
+      atomicWriteSync(filePath, validLines.join('\n') + '\n');
+      console.log(`[memory-consolidator] ${teamName}: Self-healing — ${malformedCount}건 손상 라인 제거, ${validLines.length}건 유지`);
+    } catch (err) {
+      console.error(`[memory-consolidator] ${teamName}: Self-healing write failed: ${err instanceof Error ? err.message : err}`);
+    }
+    // 유효한 라인만으로 재분류
+    old.length = 0;
+    recent.length = 0;
+    for (const line of validLines) {
       try {
-        atomicWriteSync(filePath, validLines.join('\n') + '\n');
-        console.log(`[memory-consolidator] ${teamName}: Self-healing — ${malformedCount}건 손상 라인 제거, ${validLines.length}건 유지`);
-      } catch (err) {
-        console.error(`[memory-consolidator] ${teamName}: Self-healing write failed: ${err instanceof Error ? err.message : err}`);
-      }
-      // 유효한 라인만으로 재분류
-      old.length = 0;
-      recent.length = 0;
-      for (const line of validLines) {
-        try {
-          const ep: Episode = JSON.parse(line);
-          if (now - ep.ts > EPISODE_AGE_THRESHOLD_MS) {
-            old.push(ep);
-          } else {
-            recent.push(line);
-          }
-        } catch {
-          // already filtered
+        const ep: Episode = JSON.parse(line);
+        if (now - ep.ts > EPISODE_AGE_THRESHOLD_MS) {
+          old.push(ep);
+        } else {
+          recent.push(line);
         }
+      } catch {
+        // already filtered
       }
     }
   }
