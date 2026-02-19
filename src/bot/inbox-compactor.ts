@@ -5,7 +5,7 @@ import { atomicWriteSync } from '../utils/fs.js';
 import { isBusy, isQueued } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { addMessage } from '../teams/context.js';
-import { newChain, sendAsTeam } from './client.js';
+import { newChain } from './client.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 /** Check if a team is currently busy or queued (not available for new work). */
@@ -233,7 +233,6 @@ async function leaderHeartbeat(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
-    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
     // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
@@ -295,10 +294,7 @@ async function followUpLoop(
         timestamp: new Date(),
         mentions: [team.id],
       };
-      const nudgeLeader = Object.values(config.teams).find(t => t.isLeader);
       addMessage(record.channelId, nudgeMsg);
-      if (nudgeLeader) await sendAsTeam(record.channelId, nudgeLeader, `📋 ${nudgeMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
-      // sendAsTeam await 후 재확인 — 비동기 간격 동안 상태 변경 가능
       if (isOccupied(team.id)) {
         console.log(`[follow-up] ${team.name} became occupied during nudge, skipping invocation`);
       } else {
@@ -323,8 +319,6 @@ async function followUpLoop(
         const alertChannelId = env.workChannelId || env.memberTrackingChannelId;
         if (alertChannelId) {
           addMessage(alertChannelId, alertMsg);
-          await sendAsTeam(alertChannelId, leader, `📋 ${alertMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
-          // sendAsTeam await 후 재확인 — 비동기 간격 동안 상태 변경 가능
           if (isOccupied(leader.id)) {
             console.log(`[follow-up] Leader became occupied during alert, skipping invocation`);
           } else {
@@ -363,7 +357,6 @@ async function dailyDigest(
     mentions: [leader.id],
   };
   addMessage(digestChannelId, digestMsg);
-  await sendAsTeam(digestChannelId, leader, `📋 ${digestMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
   // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
   if (isOccupied(leader.id)) return;
   triggerInvocation(leader, digestMsg, digestChannelId, config, env, newChain());
@@ -464,9 +457,7 @@ async function pendingTaskLoop(
       timestamp: new Date(),
       mentions: [team.id],
     };
-    const pendingLeader = Object.values(config.teams).find(t => t.isLeader);
     addMessage(task.channelId, triggerMsg);
-    if (pendingLeader) await sendAsTeam(task.channelId, pendingLeader, `📋 ${triggerMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
     // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
     if (isOccupied(team.id)) continue;
     triggerInvocation(team, triggerMsg, task.channelId, config, env, newChain());
@@ -546,7 +537,6 @@ export function startInboxCompactor(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
-    await sendAsTeam(channelId, leaderTeam, `📋 ${systemMsg.content}`).catch(err => console.warn('[inbox-compactor] sendAsTeam failed:', err instanceof Error ? err.message : err));
     if (isOccupied(leaderTeam.id)) {
       console.log('[inbox-compactor] Leader became busy before invoke, skipping');
       return;
