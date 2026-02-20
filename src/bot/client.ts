@@ -923,21 +923,22 @@ async function executeInvocation(
     ledger.resolve(team.id, mentionedTeams.map(t => t.id));
 
     // ---------------------------------------------------------------------------
-    // Centralized dispatch: ONLY the leader dispatches to other teams.
-    // Non-leader output with mentions is routed to the leader's inbox so the
-    // leader can decide whether (and when) to invoke the mentioned teams.
+    // Dispatch: Leader dispatches to all mentioned teams directly.
+    // Non-leader dispatches to peer (non-leader) teams directly, while routing
+    // leader mentions through the leader's inbox for centralized handling.
     // ---------------------------------------------------------------------------
     if (finalOutput) {
       if (team.isLeader) {
         // Leader dispatches directly to mentioned teams
         dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
       } else {
-        // Non-leader: route mentions to leader inbox for centralized dispatch
+        // Non-leader: dispatch to peer teams directly + notify leader via inbox
         const mentionedInOutput = findMentionedTeams(result.output, config);
         const nonSelfMentions = mentionedInOutput.filter(
           t => t.id !== team.id && t.discordUserId !== config.humanDiscordId,
         );
         if (nonSelfMentions.length > 0) {
+          // Notify leader inbox for visibility
           const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
           if (leaderTeam) {
             appendToInbox(
@@ -948,13 +949,8 @@ async function executeInvocation(
               channelId,
             ).catch(() => {});
           }
-          // Record and auto-resolve in ledger (non-leader report, no follow-up needed)
-          for (const target of nonSelfMentions) {
-            if (target.isLeader) {
-              const rec = ledger.record(chain.chainId, team.id, target.id, channelId, finalOutput.slice(0, 200));
-              ledger.resolveById(rec.id);
-            }
-          }
+          // Direct dispatch: invoke all mentioned targets (including leader) immediately
+          dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
         }
       }
     }
@@ -968,7 +964,7 @@ async function executeInvocation(
 }
 
 // ---------------------------------------------------------------------------
-// Centralized dispatch — leader-only: invoke mentioned teams from leader output
+// Centralized dispatch — invoke mentioned teams from agent output
 // ---------------------------------------------------------------------------
 
 function dispatchMentionedTeams(
