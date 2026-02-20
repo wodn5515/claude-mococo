@@ -25,7 +25,7 @@ import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainCont
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CHAIN_BUDGET = 20;
-const MAX_TIMEOUT_CONTINUATIONS = 1; // Maximum re-invocations on timeout
+const MAX_TIMEOUT_CONTINUATIONS = 3; // Maximum re-invocations on timeout
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
 export const teamClients = new Map<string, Client>();
