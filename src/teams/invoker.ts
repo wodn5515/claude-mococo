@@ -2,6 +2,8 @@ import { createEngine } from '../orchestrator/engines.js';
 import { buildTeamPrompt } from '../orchestrator/prompt-builder.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
+const INVOKE_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes — safety net above engine-level timeout
+
 export interface InvocationResult {
   teamId: string;
   output: string;
@@ -27,7 +29,7 @@ export async function invokeTeam(
     mcpServers: team.mcpServers,
   });
 
-  return new Promise((resolve, reject) => {
+  const enginePromise = new Promise<InvocationResult>((resolve, reject) => {
     let resolved = false;
 
     engine.on('result', (event) => {
@@ -47,4 +49,13 @@ export async function invokeTeam(
 
     engine.start().catch(reject);
   });
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      engine.kill();
+      reject(new Error(`Team ${team.id} (${team.engine}) timed out after ${INVOKE_TIMEOUT_MS / 1000}s`));
+    }, INVOKE_TIMEOUT_MS);
+  });
+
+  return Promise.race([enginePromise, timeoutPromise]);
 }
