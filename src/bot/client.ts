@@ -949,15 +949,8 @@ async function executeInvocation(
               channelId,
             ).catch(() => {});
           }
-          // Record and auto-resolve leader mentions in ledger
-          for (const target of nonSelfMentions) {
-            if (target.isLeader) {
-              const rec = ledger.record(chain.chainId, team.id, target.id, channelId, finalOutput.slice(0, 200));
-              ledger.resolveById(rec.id);
-            }
-          }
-          // Direct peer dispatch: invoke non-leader targets immediately
-          dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain, { skipLeader: true });
+          // Direct dispatch: invoke all mentioned targets (including leader) immediately
+          dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
         }
       }
     }
@@ -971,7 +964,7 @@ async function executeInvocation(
 }
 
 // ---------------------------------------------------------------------------
-// Centralized dispatch — leader-only: invoke mentioned teams from leader output
+// Centralized dispatch — invoke mentioned teams from agent output
 // ---------------------------------------------------------------------------
 
 function dispatchMentionedTeams(
@@ -982,14 +975,12 @@ function dispatchMentionedTeams(
   config: TeamsConfig,
   env: EnvConfig,
   chain: ChainContext,
-  options?: { skipLeader?: boolean },
 ): void {
   const mentioned = findMentionedTeams(rawOutput, config);
 
   for (const target of mentioned) {
     if (target.id === sourceTeam.id) continue;
     if (target.discordUserId === config.humanDiscordId) continue;
-    if (options?.skipLeader && target.isLeader) continue;
 
     if (isQueued(target.id)) {
       console.log(`[dispatch] Skip ${target.name} — already queued`);
