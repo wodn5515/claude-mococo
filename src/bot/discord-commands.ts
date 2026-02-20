@@ -7,9 +7,9 @@ import type { TeamConfig, TeamsConfig, EnvConfig } from '../types.js';
 // Strip memory/persona blocks — extracts content, saves to file, then strips
 // ---------------------------------------------------------------------------
 
-const MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---(?:\s*\n?```)?/g;
-const LONG_MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?---LONG-MEMORY---\n([\s\S]*?)\n---END-LONG-MEMORY---(?:\s*\n?```)?/g;
-const PERSONA_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n([\s\S]*?)\n---END-PERSONA---(?:\s*\n?```)?/g;
+const MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}\s*\n?\s*MEMORY\s*-{3,}\s*\n([\s\S]*?)\n\s*-{3,}\s*\n?\s*END-MEMORY\s*-{3,}(?:\s*\n?```)?/g;
+const LONG_MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}\s*\n?\s*LONG-MEMORY\s*-{3,}\s*\n([\s\S]*?)\n\s*-{3,}\s*\n?\s*END-LONG-MEMORY\s*-{3,}(?:\s*\n?```)?/g;
+const PERSONA_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}\s*\n?\s*PERSONA\s*-{3,}\s*\n([\s\S]*?)\n\s*-{3,}\s*\n?\s*END-PERSONA\s*-{3,}(?:\s*\n?```)?/g;
 
 export function stripMemoryBlocks(
   output: string,
