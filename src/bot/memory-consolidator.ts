@@ -59,14 +59,14 @@ function parseConsolidateResult(stdout: string): { longTerm: string; shortTerm: 
   const longMatch = stdout.match(/---LONG-TERM---\n([\s\S]*?)\n---END-LONG-TERM---/);
   const shortMatch = stdout.match(/---SHORT-TERM---\n([\s\S]*?)\n---END-SHORT-TERM---/);
 
-  if (!longMatch && !shortMatch) {
-    console.warn(`[memory-consolidator] Could not parse consolidation output (${stdout.length} chars), skipping`);
+  if (!longMatch || !shortMatch) {
+    console.warn(`[memory-consolidator] Could not parse consolidation output — longTerm:${!!longMatch} shortTerm:${!!shortMatch} (${stdout.length} chars), skipping`);
     return null;
   }
 
   return {
-    longTerm: longMatch?.[1]?.trim() ?? '',
-    shortTerm: shortMatch?.[1]?.trim() ?? '',
+    longTerm: longMatch[1].trim(),
+    shortTerm: shortMatch[1].trim(),
   };
 }
 
