@@ -247,9 +247,9 @@ const registry = new ResourceRegistry();
 
 // Safety-net: strip any internal command blocks that should never reach Discord
 const INTERNAL_BLOCK_PATTERNS = [
-  /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}MEMORY-{3,}\s*\n[\s\S]*?\n-{3,}END-MEMORY-{3,}(?:\s*\n?```)?/g,
-  /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}LONG-MEMORY-{3,}\s*\n[\s\S]*?\n-{3,}END-LONG-MEMORY-{3,}(?:\s*\n?```)?/g,
-  /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}PERSONA-{3,}\s*\n[\s\S]*?\n-{3,}END-PERSONA-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}\s*\n?\s*MEMORY\s*-{3,}\s*\n[\s\S]*?\n\s*-{3,}\s*\n?\s*END-MEMORY\s*-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}\s*\n?\s*LONG-MEMORY\s*-{3,}\s*\n[\s\S]*?\n\s*-{3,}\s*\n?\s*END-LONG-MEMORY\s*-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}\s*\n?\s*PERSONA\s*-{3,}\s*\n[\s\S]*?\n\s*-{3,}\s*\n?\s*END-PERSONA\s*-{3,}(?:\s*\n?```)?/g,
 ];
 
 function sanitizeForDiscord(text: string): string {
