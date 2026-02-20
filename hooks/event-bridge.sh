@@ -6,11 +6,16 @@ EVENT_TYPE="${1:-unknown}"
 DETAIL="${2:-}"
 SESSION_ID="${3:-}"
 HOOK_PORT="${HOOK_PORT:-9876}"
+HOOK_SECRET="${HOOK_SECRET:-}"
 TEAM="${MOCOCO_TEAM:-unknown}"
 
+CURL_ARGS=(-s -X POST "http://localhost:${HOOK_PORT}/hook" -H "Content-Type: application/json")
+if [ -n "$HOOK_SECRET" ]; then
+  CURL_ARGS+=(-H "Authorization: Bearer ${HOOK_SECRET}")
+fi
+
 # Only forward if hook server is running
-curl -s -X POST "http://localhost:${HOOK_PORT}/hook" \
-  -H "Content-Type: application/json" \
+curl "${CURL_ARGS[@]}" \
   -d "{
     \"hook_event_name\": \"${EVENT_TYPE}\",
     \"session_id\": \"${SESSION_ID}\",

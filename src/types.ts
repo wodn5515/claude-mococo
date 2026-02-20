@@ -73,6 +73,7 @@ export interface Episode {
 export interface EnvConfig {
   workChannelId?: string;
   hookPort: number;
+  hookSecret?: string;
   memberTrackingChannelId?: string;
   decisionLogChannelId?: string;
 }

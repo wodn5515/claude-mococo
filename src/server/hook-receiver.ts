@@ -6,11 +6,28 @@ export const hookEvents = new EventEmitter();
 
 const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
 
-export function startHookServer(port: number) {
+export function startHookServer(port: number, secret?: string) {
+  if (!secret) {
+    console.warn('[hook-receiver] HOOK_SECRET not set — all requests will be rejected. Set HOOK_SECRET in .env');
+  }
+
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/hook') {
       res.writeHead(404);
       res.end();
+      return;
+    }
+
+    if (!secret) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end('{"error":"HOOK_SECRET not configured"}');
+      return;
+    }
+
+    const auth = req.headers['authorization'];
+    if (auth !== `Bearer ${secret}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end('{"error":"unauthorized"}');
       return;
     }
 

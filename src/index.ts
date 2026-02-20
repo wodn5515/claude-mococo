@@ -9,6 +9,7 @@ async function main() {
   const env: EnvConfig = {
     workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
+    hookSecret: process.env.HOOK_SECRET || undefined,
     memberTrackingChannelId: process.env.MEMBER_TRACKING_CHANNEL_ID || undefined,
     decisionLogChannelId: process.env.DECISION_LOG_CHANNEL_ID || undefined,
   };
@@ -25,7 +26,7 @@ async function main() {
     process.exit(1);
   }
 
-  startHookServer(env.hookPort);
+  startHookServer(env.hookPort, env.hookSecret);
 
   console.log(`Starting ${teamsWithTokens.length} team bots...`);
   await createBots(config, env);
