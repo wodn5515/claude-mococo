@@ -50,6 +50,11 @@ const MAX_NUDGES_PER_RECORD = 2;
 const followUpCooldowns = new Map<string, number>();
 const FOLLOW_UP_COOLDOWN_MS = 30 * 60_000; // 30 minutes cooldown per team
 
+// Heartbeat dedup — suppress repeated invocations for identical context
+const HEARTBEAT_DEDUP_WINDOW_MS = 60 * 60_000; // 1 hour suppression window
+let lastHeartbeatFingerprint: string | null = null;
+let lastHeartbeatInvokeAt = 0;
+
 function isFollowUpOnCooldown(teamId: string): boolean {
   const lastNudge = followUpCooldowns.get(teamId);
   if (!lastNudge) return false;
@@ -125,6 +130,7 @@ async function leaderHeartbeat(
     try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
 
     const unresolved = ledger.getUnresolved(5 * 60_000); // 5min+
+    const highIssueKeys: string[] = []; // for heartbeat dedup fingerprint
 
     let improvementReport: string | null = null;
     try {
@@ -178,6 +184,7 @@ async function leaderHeartbeat(
           lines.push('--- high ---');
           for (const i of high) {
             lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+            highIssueKeys.push(`${i.repo}/${i.file}:${i.type}`);
           }
         }
         if (medium.length > 0) {
@@ -204,6 +211,18 @@ async function leaderHeartbeat(
 
     // Nothing to evaluate
     if (!inbox && unresolved.length === 0 && !improvementReport) return;
+
+    // Dedup check — suppress if same dispatches + issues were already reported recently
+    const heartbeatFp = [
+      ...unresolved.map(r => r.id).sort(),
+      '||',
+      ...highIssueKeys.sort(),
+    ].join('|');
+
+    if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
+      console.log('[heartbeat] Suppressed: identical context already reported within dedup window');
+      return;
+    }
 
     // Haiku triage
     const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport);
@@ -234,6 +253,9 @@ async function leaderHeartbeat(
     };
     addMessage(channelId, systemMsg);
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
+    // Update heartbeat dedup state
+    lastHeartbeatFingerprint = heartbeatFp;
+    lastHeartbeatInvokeAt = Date.now();
     // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
     console.error(`[heartbeat] Error: ${err}`);
