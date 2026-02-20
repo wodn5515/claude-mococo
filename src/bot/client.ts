@@ -786,6 +786,27 @@ export async function handleTeamInvocation(
   markBusy(team.id, triggerMsg.content.slice(0, 50));
   console.log(`[${team.name}] Invoking (chain: ${chain.totalInvocations}/${chain.maxBudget}, trigger: ${triggerMsg.content.slice(0, 80)})`);
 
+  try {
+    await executeInvocation(team, triggerMsg, channelId, config, env, chain, continuationCount);
+  } finally {
+    markFree(team.id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inner invocation logic — separated so timeout continuations can recurse
+// directly while the team stays busy (no markFree/markBusy gap = no race).
+// ---------------------------------------------------------------------------
+
+async function executeInvocation(
+  team: TeamConfig,
+  triggerMsg: ConversationMessage,
+  channelId: string,
+  config: TeamsConfig,
+  env: EnvConfig,
+  chain: ChainContext,
+  continuationCount: number,
+): Promise<void> {
   // Pre-read and atomically clear inbox for leader to prevent data loss.
   // Messages arriving during engine execution go to a fresh file and survive.
   let preloadedInbox: string | undefined;
@@ -819,10 +840,10 @@ export async function handleTeamInvocation(
 
     console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)}${result.timedOut ? ', TIMED OUT' : ''})`);
 
-    // Handle timeout continuation — re-invoke with inbox context
+    // Handle timeout continuation — recurse directly while team stays busy
     if (result.timedOut) {
       if (continuationCount < MAX_TIMEOUT_CONTINUATIONS) {
-        console.log(`[${team.name}] Timeout detected, scheduling continuation (${continuationCount + 1}/${MAX_TIMEOUT_CONTINUATIONS})`);
+        console.log(`[${team.name}] Timeout detected, continuing (${continuationCount + 1}/${MAX_TIMEOUT_CONTINUATIONS})`);
         await appendToInbox(
           team.id,
           'System',
@@ -830,18 +851,19 @@ export async function handleTeamInvocation(
           config.workspacePath,
           channelId,
         ).catch(() => {});
-        // Re-invoke with incremented continuation count (runs after markFree in finally block)
-        setTimeout(() => {
-          const continuationMsg: ConversationMessage = {
-            teamId: 'system',
-            teamName: 'System',
-            content: `[보고 요청] 이전 작업 결과를 보고해주세요. 작업 내용: ${triggerMsg.content.slice(0, 200)}`,
-            timestamp: new Date(),
-            mentions: [team.id],
-          };
-          handleTeamInvocation(team, continuationMsg, channelId, config, env, chain, continuationCount + 1);
-        }, 3_000); // 3s delay to let markFree complete
-        return; // Skip normal output processing
+
+        // Update busy status for observability
+        markBusy(team.id, `continuation ${continuationCount + 1}/${MAX_TIMEOUT_CONTINUATIONS}`);
+
+        const continuationMsg: ConversationMessage = {
+          teamId: 'system',
+          teamName: 'System',
+          content: `[보고 요청] 이전 작업 결과를 보고해주세요. 작업 내용: ${triggerMsg.content.slice(0, 200)}`,
+          timestamp: new Date(),
+          mentions: [team.id],
+        };
+        // Direct recursion — team stays busy, no markFree gap = no race with external triggers
+        return executeInvocation(team, continuationMsg, channelId, config, env, chain, continuationCount + 1);
       }
       console.warn(`[${team.name}] Max continuations reached (${MAX_TIMEOUT_CONTINUATIONS}), not retrying`);
       await sendAsTeam(channelId, team, `작업이 시간 초과되었습니다. 다음 호출 시 메모리에서 이어서 작업합니다.`).catch(() => {});
@@ -942,7 +964,6 @@ export async function handleTeamInvocation(
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
     clearInterval(typingInterval);
-    markFree(team.id);
   }
 }
 

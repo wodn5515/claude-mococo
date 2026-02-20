@@ -30,6 +30,14 @@ export async function invokeTeam(
     mcpServers: team.mcpServers,
   });
 
+  // Track last known cost from engine messages so timeout can report actual spend
+  let lastKnownCost = 0;
+  engine.on('message', (event) => {
+    if (typeof event.total_cost_usd === 'number') {
+      lastKnownCost = event.total_cost_usd;
+    }
+  });
+
   const enginePromise = new Promise<InvocationResult>((resolve, reject) => {
     let resolved = false;
 
@@ -54,11 +62,11 @@ export async function invokeTeam(
   const timeoutPromise = new Promise<InvocationResult>((resolve) => {
     setTimeout(() => {
       engine.kill();
-      console.warn(`[${team.id}] Timed out after ${INVOKE_TIMEOUT_MS / 1000}s — returning partial result for continuation`);
+      console.warn(`[${team.id}] Timed out after ${INVOKE_TIMEOUT_MS / 1000}s (cost so far: $${lastKnownCost.toFixed(4)}) — returning partial result for continuation`);
       resolve({
         teamId: team.id,
         output: '',
-        cost: 0,
+        cost: lastKnownCost,
         timedOut: true,
       });
     }, INVOKE_TIMEOUT_MS);
