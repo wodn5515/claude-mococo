@@ -18,8 +18,12 @@ export class ClaudeEngine extends BaseEngine {
     ];
 
     if (this.opts.mcpServers && Object.keys(this.opts.mcpServers).length > 0) {
-      this.mcpConfigPath = writeMcpConfig(this.opts.teamId, this.opts.mcpServers, this.opts.cwd);
-      args.push('--mcp-config', this.mcpConfigPath);
+      try {
+        this.mcpConfigPath = writeMcpConfig(this.opts.teamId, this.opts.mcpServers, this.opts.cwd);
+        args.push('--mcp-config', this.mcpConfigPath);
+      } catch (err) {
+        console.error(`[claude:${this.opts.teamId}] Failed to write MCP config, proceeding without MCP:`, err);
+      }
     }
 
     this.proc = spawn('claude', args, {
