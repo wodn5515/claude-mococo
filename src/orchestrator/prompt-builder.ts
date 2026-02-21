@@ -8,7 +8,7 @@ const MAX_INBOX_ENTRIES = 20;
 const MAX_ENTRY_CHARS = 200;
 
 // File cache for rarely-changing files (shared rules, member list)
-// 파일 캐시: mtime + size 모두 비교하여 변경 감지 정확도 향상
+// File cache: compare both mtime + size for accurate change detection
 const fileCache = new Map<string, { content: string; cachedAt: number; size: number; mtimeMs: number }>();
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
@@ -17,7 +17,7 @@ function readCached(filePath: string): string {
   const cached = fileCache.get(filePath);
 
   if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
-    // TTL 내라도 파일 크기/수정 시간이 변경되었으면 캐시 무효화
+    // Invalidate cache if file size/mtime changed even within TTL
     try {
       const stat = fs.statSync(filePath);
       if (stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
@@ -30,7 +30,7 @@ function readCached(filePath: string): string {
   }
 
   try {
-    // 단일 stat 호출로 크기/수정시간 확인 후 내용 읽기 (이중 stat 방지)
+    // Single stat call for size/mtime check then read content (avoid double stat)
     const stat = fs.statSync(filePath);
     const content = fs.readFileSync(filePath, 'utf-8').trim();
     fileCache.set(filePath, { content, cachedAt: now, size: stat.size, mtimeMs: stat.mtimeMs });
@@ -87,9 +87,9 @@ function summarizeInbox(raw: string, teamId: string): string {
       : failedLines.slice(0, 3).map(l => l.slice(0, 80)).join('; ') + '...';
     const failRatio = failedLines.length / merged.length;
     if (failRatio > 0.5) {
-      console.error(`[summarizeInbox] ${teamId}: ${failedLines.length}/${merged.length}건 파싱 실패 (${(failRatio * 100).toFixed(0)}% — 과반 이상) — ${sample}`);
+      console.error(`[summarizeInbox] ${teamId}: ${failedLines.length}/${merged.length} entries failed to parse (${(failRatio * 100).toFixed(0)}% — majority) — ${sample}`);
     } else {
-      console.warn(`[summarizeInbox] ${teamId}: ${failedLines.length}/${merged.length}건 파싱 실패 — ${sample}`);
+      console.warn(`[summarizeInbox] ${teamId}: ${failedLines.length}/${merged.length} entries failed to parse — ${sample}`);
     }
   }
 
@@ -195,81 +195,81 @@ function loadInbox(ws: string, team: TeamConfig, preloadedInbox?: string): strin
 // Prompt section builders
 // ---------------------------------------------------------------------------
 
-function buildMemorySection(longTerm: string, shortTerm: string, chId: string): string {
+function buildMemorySection(longTerm: string, shortTerm: string, chId: string, humanTitle: string): string {
   return `## Long-term Memory
 Important knowledge that persists permanently. Only update when you have something worth keeping forever.
 Use these sections to organize:
 
-### 사용자 & 멤버
-예시:
-- 회장님: 한국어 선호, 코드 품질 중시, 매주 월요일 주간보고
-- @김개발: 백엔드 전문, TypeScript 주력
+### Users & Members
+Example:
+- ${humanTitle}: prefers Korean, values code quality, weekly Monday reports
+- @dev-member: backend specialist, TypeScript focus
 
-### 프로젝트 & 구조
-예시:
+### Projects & Structure
+Example:
 - mococo-api: Express + TypeScript, repos/mococo-api
-- 배포: main → staging 자동, production 수동
+- Deploy: main → staging auto, production manual
 
-### 정책 & 규칙
-예시:
-- PR 머지는 회장님만 가능
-- 핫픽스는 autonomous 결정 가능, 기능 추가는 propose
+### Policies & Rules
+Example:
+- PR merge is ${humanTitle}-only
+- Hotfixes can be autonomous, feature additions need proposal
 
-### 팀 역량
-예시:
-- Backend팀: API 설계, DB 마이그레이션, 성능 최적화
-- Frontend팀: React, 배포 파이프라인, UI/UX
+### Team Capabilities
+Example:
+- Backend team: API design, DB migrations, performance optimization
+- Frontend team: React, deploy pipelines, UI/UX
 
 ${longTerm ? `\n${longTerm}\n` : '\n(empty)\n'}
 ## Short-term Memory
 Working context for current tasks. Update every response.
 Use these sections to organize:
 
-### 진행중 작업
-(현재 태스크, 담당자, 블로커 — 반드시 #ch:숫자ID 포함)
-예시:
-- FE 배포 스크립트 작성 중 #ch:${chId}
-- 팀원A에게 API 연동 위임, 결과 대기 #ch:${chId}
+### In Progress
+(current tasks, assignees, blockers — must include #ch:numericID)
+Example:
+- Writing FE deploy script #ch:${chId}
+- Delegated API integration to member A, awaiting result #ch:${chId}
 
-### 대기 항목
-(미완료 작업 — 반드시 #ch:숫자ID 포함. 태그: [BLOCKED], [SCHEDULED:YYYY-MM-DD], [READY])
-예시:
-- DB 마이그레이션 실행 #ch:1234567890123456
-- Redis 설정 [BLOCKED] — 팀원A 완료 대기 #ch:1234567890123456
-- 주간보고 작성 [SCHEDULED:2026-02-17] #ch:9876543210123456
+### Waiting
+(incomplete tasks — must include #ch:numericID. Tags: [BLOCKED], [SCHEDULED:YYYY-MM-DD], [READY])
+Example:
+- DB migration execution #ch:1234567890123456
+- Redis setup [BLOCKED] — waiting for member A #ch:1234567890123456
+- Weekly report [SCHEDULED:2026-02-17] #ch:9876543210123456
 
-### 캐시된 외부 데이터
-(API 조회 결과 + 조회 시각. 24시간 이상 경과 시 재조회 필요.)
-예시:
-- [2/12 10:30] 캘린더: 오늘 일정 3건 (팀미팅 14:00, 코드리뷰 16:00)
-- [2/12 09:00] GitHub PR: #142 리뷰 대기, #140 머지 완료
+### Cached External Data
+(API query results + query time. Re-query if older than 24 hours.)
+Example:
+- [2/12 10:30] Calendar: 3 events today (team meeting 14:00, code review 16:00)
+- [2/12 09:00] GitHub PR: #142 review pending, #140 merged
 
-⚠️ #ch: 뒤에는 반드시 실제 Discord 채널 ID(숫자)를 적어라. 현재 채널 ID: ${chId}
+⚠️ After #ch: you must write the actual Discord channel ID (numeric). Current channel ID: ${chId}
 ${shortTerm ? `\n${shortTerm}\n` : '\n(empty)\n'}`;
 }
 
-function buildDiscordCommandsSection(team: TeamConfig): string {
+function buildDiscordCommandsSection(team: TeamConfig, humanTitle: string, leaderName: string): string {
   const leaderDecisionLog = `
-**Decision Log (자율 결정 기록 — 리더 전용):**
-자율적으로 결정을 내릴 때 반드시 다음 태그를 출력에 포함:
-\`[decision:level reason="설명" action="조치 내용"]\`
+**Decision Log (autonomous decisions — leader only):**
+When making autonomous decisions, always include the following tag in your output:
+\`[decision:level reason="description" action="action taken"]\`
 
 Levels:
-- \`autonomous\` — 루틴 작업 (버그 수정, 리팩토링, 작업 재분배). 실행 후 기록만.
-- \`inform\` — 기존 범위 내 개선. 실행 후 보고.
-- \`propose\` — 새 기능, 아키텍처 변경, 새 도구 도입. 회장님 승인 대기.
-- \`escalate\` — 보안, 장애, 긴급. 즉시 회장님 태그.
+- \`autonomous\` — Routine tasks (bug fixes, refactoring, work redistribution). Execute and log.
+- \`inform\` — Improvements within existing scope. Execute and report.
+- \`propose\` — New features, architecture changes, new tools. Await ${humanTitle} approval.
+- \`escalate\` — Security, outages, urgent. Tag ${humanTitle} immediately.
 
-예: \`[decision:autonomous reason="중복 코드 발견" action="Backend팀에게 리팩토링 지시"]\`
-예: \`[decision:propose reason="새 인증 시스템 필요" action="회장님 승인 대기"]\`
+Example: \`[decision:autonomous reason="duplicate code found" action="assigned refactoring to Backend team"]\`
+Example: \`[decision:propose reason="new auth system needed" action="awaiting ${humanTitle} approval"]\`
 `;
 
   const memberImprovementNote = `
-**개선사항 발견 시 (비리더 팀 전용):**
-작업 중 버그, 보안 취약점, 성능 이슈, 리팩토링 필요 코드를 발견하면 대장코코에게 보고하라.
-output 마지막에 대장코코를 태그하고 발견 내용을 간단히 기술:
-예: \`<@대장코코ID> [발견] medium: utils.ts에 중복 코드, 리팩토링 필요\`
-이렇게 하면 시스템이 자동으로 대장코코를 invoke하여 판단한다.
+**When discovering improvements (non-leader teams only):**
+If you find bugs, security vulnerabilities, performance issues, or code needing refactoring, report to ${leaderName}.
+Tag ${leaderName} at the end of your output with a brief description:
+Example: \`<@leaderID> [found] medium: duplicate code in utils.ts, needs refactoring\`
+The system will automatically invoke ${leaderName} for evaluation.
 `;
 
   return `## Discord Commands
@@ -307,16 +307,16 @@ Syntax: \`[discord:action key=value key="quoted value"]\`
 - \`[discord:delete-role name=Developer]\`
 - \`[discord:assign-role role=Developer user=123456789]\` — assign role to user
 - \`[discord:remove-role role=Developer user=123456789]\` — remove role from user
-- \`[discord:list-roles]\` — 서버 역할 목록 조회 (이름, 멤버 수)
-- \`[discord:list-channels]\` — 서버 채널 목록 조회 (카테고리별 그룹핑)
+- \`[discord:list-roles]\` — list server roles (name, member count)
+- \`[discord:list-channels]\` — list server channels (grouped by category)
 
 **Permissions (channel/category):**
 - \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel,SendMessages"]\`
 - \`[discord:set-permission channel=my-channel role=Developer deny="SendMessages"]\` — read-only
 - \`[discord:set-permission category=Projects user=123456789 allow="ViewChannel"]\`
-- \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel" deny="SendMessages"]\` — allow+deny 동시 가능
-- \`[discord:remove-permission channel=my-channel role=Developer]\` — 해당 대상의 권한 덮어쓰기 전부 제거
-사용 가능한 권한: ViewChannel, SendMessages, ReadMessageHistory, ManageMessages, ManageChannels, ManageRoles, EmbedLinks, AttachFiles, AddReactions, Connect, Speak, MentionEveryone, CreatePublicThreads, CreatePrivateThreads, UseExternalEmojis
+- \`[discord:set-permission channel=my-channel role=Developer allow="ViewChannel" deny="SendMessages"]\` — allow+deny simultaneously
+- \`[discord:remove-permission channel=my-channel role=Developer]\` — remove all permission overrides for that target
+Available permissions: ViewChannel, SendMessages, ReadMessageHistory, ManageMessages, ManageChannels, ManageRoles, EmbedLinks, AttachFiles, AddReactions, Connect, Speak, MentionEveryone, CreatePublicThreads, CreatePrivateThreads, UseExternalEmojis
 
 **Short-term Memory (REQUIRED every response):**
 Update your short-term memory at the end of every response. Include the full replacement content:
@@ -328,7 +328,7 @@ Update your short-term memory at the end of every response. Include the full rep
 This overwrites your short-term memory completely. Keep it lean and up-to-date.
 What to track: ongoing tasks, current blockers, temp context needed for next invocation.
 What NOT to track: conversation text already in history, stable facts (promote those to long-term).
-**⚠️ 미완료 작업은 반드시 "### 대기 항목" 섹션에 #ch:channelId와 함께 기록하라.** 예: \`- API 연동 마무리 #ch:123456789\`
+**⚠️ Incomplete tasks MUST be recorded in the "### Waiting" section with #ch:channelId.** Example: \`- Finish API integration #ch:123456789\`
 
 **Long-term Memory (only when needed):**
 When you learn something worth keeping permanently, also output:
@@ -373,8 +373,16 @@ export async function buildTeamPrompt(
   }
   const template = fs.readFileSync(templatePath, 'utf-8');
   const conversationText = formatConversation(invocation.conversation);
-  const sharedRules = readCached(path.resolve(ws, 'prompts/shared-rules.md'));
+  const rawSharedRules = readCached(path.resolve(ws, 'prompts/shared-rules.md'));
   const memberList = readCached(path.resolve(ws, '.mococo/members.md'));
+
+  // Resolve placeholders in shared rules
+  const humanTitle = config.humanTitle ?? 'Boss';
+  const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+  const leaderName = leaderTeam?.name ?? 'Leader';
+  const sharedRules = rawSharedRules
+    .replace(/\{\{humanTitle\}\}/g, humanTitle)
+    .replace(/\{\{leaderName\}\}/g, leaderName);
 
   // 2. Build dynamic context
   const teamDirectory = buildTeamDirectory(config, team.id);
@@ -387,8 +395,8 @@ export async function buildTeamPrompt(
   const currentTime = new Date().toISOString().slice(0, 16).replace('T', ' ');
 
   // 4. Build prompt sections
-  const memorySection = buildMemorySection(longTerm, shortTerm, chId);
-  const discordCommands = buildDiscordCommandsSection(team);
+  const memorySection = buildMemorySection(longTerm, shortTerm, chId, humanTitle);
+  const discordCommands = buildDiscordCommandsSection(team, humanTitle, leaderName);
 
   // 5. Build inbox/memory instruction (leader vs member)
   const inboxInstruction = team.isLeader
@@ -398,7 +406,7 @@ ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
     : `**You MUST update your short-term memory at the end of every response** using the memory command (see Discord Commands below). Review your current memory, incorporate new information, and remove anything outdated.`;
 
   // 6. Build mention info
-  const humanMention = config.humanDiscordId ? `- Human (회장님): <@${config.humanDiscordId}>` : '';
+  const humanMention = config.humanDiscordId ? `- Human (${humanTitle}): <@${config.humanDiscordId}>` : '';
   const triggerMention = invocation.message.discordId && invocation.message.discordId !== config.humanDiscordId
     ? `\n- ${invocation.message.teamName}: <@${invocation.message.discordId}>`
     : '';
@@ -419,19 +427,19 @@ ${team.teamRules?.length ? `\n### Team Rules\n${team.teamRules.map(r => `- ${r}`
   return `${template}
 ${sharedRules ? `\n${sharedRules}\n` : ''}
 ## Current Context
-현재 채널: ${chId}
-현재 시각: ${currentTime}
+Current channel: ${chId}
+Current time: ${currentTime}
 
 ${memorySection}
-## Recent Activity (자동 생성 — 수정 불필요)
-최근 활동 요약. 이전 호출에서 무엇을 했는지 파악하여 맥락을 이어가라.
+## Recent Activity (auto-generated — do not edit)
+Summary of recent activity. Review what was done in previous invocations to maintain context.
 ${recentEpisodes || '(no recent activity)'}
 
 ${inboxInstruction}
-**⚠️ CRITICAL: 외부 도구 호출 전 반드시 메모리를 먼저 확인하라.**
-- Short-term/Long-term Memory에 이미 있는 데이터는 절대 다시 API 호출하지 마라.
-- 예: 일주일치 일정을 이미 조회해서 메모리에 있으면, 오늘 일정을 물어봤을 때 메모리에서 추출하라. 같은 데이터를 또 API로 가져오지 마라.
-- 외부 도구(API, MCP 서버)는 메모리에 관련 데이터가 전혀 없거나, 데이터가 오래되었거나(24시간+), 사용자가 명시적으로 "새로 조회해줘"라고 요청한 경우에만 호출하라.
+**⚠️ CRITICAL: Always check memory before calling external tools.**
+- Never re-call APIs for data already in Short-term/Long-term Memory.
+- Example: If a week's schedule is already in memory, extract today's events from memory. Don't fetch the same data again.
+- Only call external tools (APIs, MCP servers) when: no related data in memory, data is stale (24h+), or user explicitly requests a fresh query.
 
 ## Server Members
 ${memberList || '(no member data)'}
@@ -446,10 +454,10 @@ ${conversationText}
 \`\`\`
 
 ## Discord Mentions
-**보내기: 말을 전달하려는 대상은 반드시 전부 태그한다. 예외 없음.**
-- 대상이 1명이면 \`<@ID>\`로 시작
-- 대상이 여러 명이면 전부 나열: \`<@ID1> <@ID2> <@ID3>\`로 시작
-- 답변, 보고, 위임, 질문 — 모든 경우에 태그
+**Sending: Always tag everyone you're addressing. No exceptions.**
+- For 1 recipient: start with \`<@ID>\`
+- For multiple: list all: \`<@ID1> <@ID2> <@ID3>\`
+- Replies, reports, delegations, questions — always tag
 
 ${humanMention}${triggerMention}
 

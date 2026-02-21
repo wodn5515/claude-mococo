@@ -28,9 +28,9 @@ export async function runInit(): Promise<void> {
   const isReinit = fs.existsSync(teamsJsonPath);
 
   if (isReinit) {
-    console.log('Existing mococo workspace detected. Updating settings...\n');
+    console.log('Existing workspace detected. Updating settings...\n');
   } else {
-    console.log('Initializing mococo workspace...\n');
+    console.log('Initializing workspace...\n');
   }
 
   const channelId = await ask('Discord work channel ID (leave empty for all channels)');
@@ -83,6 +83,16 @@ export async function runInit(): Promise<void> {
 
   // Ensure directories exist (both fresh and reinit)
   fs.mkdirSync(path.join(cwd, 'prompts'), { recursive: true });
+
+  // Copy default shared-rules.md if not present
+  const sharedRulesPath = path.join(cwd, 'prompts', 'shared-rules.md');
+  if (!fs.existsSync(sharedRulesPath)) {
+    const defaultRules = path.join(getPackageRoot(), 'defaults', 'shared-rules.md');
+    if (fs.existsSync(defaultRules)) {
+      fs.copyFileSync(defaultRules, sharedRulesPath);
+    }
+  }
+
   fs.mkdirSync(path.join(cwd, 'repos'), { recursive: true });
   if (!fs.existsSync(path.join(cwd, 'repos', '.gitkeep'))) {
     fs.writeFileSync(path.join(cwd, 'repos', '.gitkeep'), '');

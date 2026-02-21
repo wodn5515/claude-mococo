@@ -42,6 +42,7 @@ export interface TeamsConfig {
   conversationWindow: number;
   workspacePath: string;
   humanDiscordId?: string;
+  humanTitle?: string;          // title for the human (e.g. "Boss"), default "Boss"
 }
 
 export interface ConversationMessage {

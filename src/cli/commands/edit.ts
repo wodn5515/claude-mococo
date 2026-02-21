@@ -24,30 +24,30 @@ const PERMISSION_PRESETS: Record<string, { allow?: string[]; deny?: string[] }> 
 };
 
 const MBTI_PRESETS: Record<string, string> = {
-  'ENTJ — 전략가, 결단력, 큰 그림': 'ENTJ — 전략가, 결단력, 큰 그림을 보는 리더',
-  'ISTJ — 규칙 준수, 체계적, 정확성': 'ISTJ — 규칙 준수, 체계적, 정확성 중시',
-  'ENFJ — 사람 중심, 공감, 조직 조화': 'ENFJ — 사람 중심 사고, 조직 조화, 공감 능력',
-  'INTP — 분석적, 논리적, 탐구형': 'INTP — 분석적, 논리적, 깊이 있는 탐구형',
+  'ENTJ — Strategist, decisive, big-picture leader': 'ENTJ — Strategist, decisive, big-picture leader',
+  'ISTJ — Rule-follower, systematic, accuracy-focused': 'ISTJ — Rule-follower, systematic, accuracy-focused',
+  'ENFJ — People-oriented, empathetic, team harmony': 'ENFJ — People-oriented, empathetic, team harmony',
+  'INTP — Analytical, logical, deep explorer': 'INTP — Analytical, logical, deep explorer',
   'Custom': '',
 };
 
 const SPEECH_PRESETS: Record<string, string> = {
-  '모두 존댓말': [
-    '  - 회장님께: 존댓말. "회장님, ~입니다"',
-    '  - 대장코코에게: 존댓말. "대장님, ~입니다"',
-    '  - 다른 모코코에게: 존댓말. "{이름}코코님"',
+  'Formal to everyone': [
+    '  - To the human: formal and respectful',
+    '  - To the leader: formal and respectful',
+    '  - To other agents: polite and professional',
   ].join('\n'),
-  '회장님 존댓말 + 팀원 반말': [
-    '  - 회장님께: 철저한 존댓말. "회장님, ~입니다", "~드리겠습니다"',
-    '  - 다른 모코코들에게: 반말. "~해라", "~해봐", "~됐어?"',
+  'Formal to human + casual to peers': [
+    '  - To the human: strictly formal and respectful',
+    '  - To other agents: casual and direct',
   ].join('\n'),
   'Custom': '',
 };
 
 const EDIT_FIELDS = [
   'name        — Display name',
-  'character   — MBTI, 말투, 성격, 습관',
-  'role        — 담당/비담당/권한',
+  'character   — MBTI, speech style, personality, habits',
+  'role        — Scope, authority, expertise',
   'engine      — Engine and model',
   'budget      — Max budget',
   'channels    — Channel restrictions',
@@ -66,6 +66,9 @@ export async function runEdit(id: string): Promise<void> {
   const teamsJsonPath = path.join(ws, 'teams.json');
   const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
   const team = raw.teams[id];
+
+  // Load humanTitle from config for prompt generation
+  const humanTitle: string = raw.humanTitle ?? 'Boss';
 
   if (!team) {
     console.error(`Assistant "${id}" not found.`);
@@ -111,14 +114,14 @@ export async function runEdit(id: string): Promise<void> {
       const mbtiChoice = await choose('MBTI:', mbtiNames, 0);
       mbti = MBTI_PRESETS[mbtiChoice];
       if (!mbti) {
-        mbti = await ask('MBTI (e.g. ISFJ — 성실, 배려, 실행력)');
+        mbti = await ask('MBTI (e.g. ISFJ — Diligent, caring, executor)');
       }
 
       const speechNames = Object.keys(SPEECH_PRESETS);
-      const speechChoice = await choose('말투:', speechNames, 0);
+      const speechChoice = await choose('Speech style:', speechNames, 0);
       speechStyle = SPEECH_PRESETS[speechChoice];
       if (!speechStyle) {
-        console.log('말투를 줄별로 입력 (빈 줄로 종료):');
+        console.log('Enter speech style line by line (empty line to finish):');
         const lines: string[] = [];
         let line = await ask('  ');
         while (line) {
@@ -128,35 +131,35 @@ export async function runEdit(id: string): Promise<void> {
         speechStyle = lines.join('\n');
       }
 
-      console.log('성격 특성 (행동 예시 포함, comma-separated):');
-      const traitsStr = await ask('  성격', '');
+      console.log('Personality traits (with behavior examples, comma-separated):');
+      const traitsStr = await ask('  Traits', '');
       traits = traitsStr ? traitsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      console.log('습관 (comma-separated):');
-      const habitsStr = await ask('  습관', '');
+      console.log('Habits (comma-separated):');
+      const habitsStr = await ask('  Habits', '');
       habits = habitsStr ? habitsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
     }
 
     if (editAll || field === 'role') {
       console.log('\n── Role ──');
-      role = await ask('핵심 역할 (1-2문장)', '');
+      role = await ask('Core role (1-2 sentences)', '');
 
-      console.log('담당 범위 (comma-separated):');
-      const scopeStr = await ask('  담당', '');
+      console.log('Scope (comma-separated):');
+      const scopeStr = await ask('  Scope', '');
       scope = scopeStr ? scopeStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      console.log('담당 아닌 것 (comma-separated):');
-      const notScopeStr = await ask('  비담당', '');
+      console.log('Not in scope (comma-separated):');
+      const notScopeStr = await ask('  Not in scope', '');
       notScope = notScopeStr ? notScopeStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      authorityIndependent = await ask('독립 결정 가능한 것', '');
-      authorityNeedsApproval = await ask('승인 필요한 것', '');
+      authorityIndependent = await ask('Independent decisions', '');
+      authorityNeedsApproval = await ask('Needs approval for', '');
 
-      console.log('전문 분야 (comma-separated):');
+      console.log('Expertise (comma-separated):');
       const expertiseStr = await ask('  Expertise', '');
       expertise = expertiseStr ? expertiseStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      console.log('추가 규칙 (comma-separated):');
+      console.log('Additional rules (comma-separated):');
       const rulesStr = await ask('  Rules', '');
       rules = rulesStr ? rulesStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
@@ -168,7 +171,7 @@ export async function runEdit(id: string): Promise<void> {
       }
     }
 
-    regeneratePrompt = await confirm('페르소나 파일 재생성? (기존 파일 덮어쓰기)', true);
+    regeneratePrompt = await confirm('Regenerate persona file? (overwrites existing)', true);
   }
 
   // Engine
@@ -212,7 +215,7 @@ export async function runEdit(id: string): Promise<void> {
   if (editAll || field === 'git') {
     const git = team.git ?? {};
     git.name = await ask('Git author name', git.name ?? `${team.name} (mococo)`);
-    git.email = await ask('Git author email', git.email ?? `mococo-${id}@users.noreply.github.com`);
+    git.email = await ask('Git author email', git.email ?? `${id}@users.noreply.github.com`);
     team.git = git;
   }
 
@@ -227,17 +230,18 @@ export async function runEdit(id: string): Promise<void> {
     const promptPath = path.join(ws, 'prompts', `${id}.md`);
     fs.writeFileSync(promptPath, generatePrompt({
       name: team.name,
-      mbti: mbti || 'MBTI — (직접 작성)',
-      speechStyle: speechStyle || '  - (직접 작성)',
+      mbti: mbti || 'MBTI — (edit manually)',
+      speechStyle: speechStyle || '  - (edit manually)',
       traits, habits,
-      role: role || '(직접 작성)',
+      role: role || '(edit manually)',
       scope, notScope,
       authorityIndependent, authorityNeedsApproval,
       expertise, rules,
       isLeader,
+      humanTitle,
     }));
-    console.log(`  페르소나 재생성: prompts/${id}.md`);
+    console.log(`  Persona regenerated: prompts/${id}.md`);
   }
 
-  console.log(`\n모코코 "${team.name}" (${id}) 수정 완료.`);
+  console.log(`\nAgent "${team.name}" (${id}) updated successfully.`);
 }
