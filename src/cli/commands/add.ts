@@ -3,6 +3,10 @@ import path from 'node:path';
 import { ask, confirm, choose, closeRL } from '../readline-utils.js';
 import { generatePrompt } from '../prompt-template.js';
 import { requireWorkspace } from '../workspace.js';
+import {
+  t, isLangExplicit, setLang,
+  getMbtiPresets, getSpeechPresets, getPermissionPresets,
+} from '../i18n.js';
 
 const ENGINE_DEFAULTS: Record<string, string> = {
   claude: 'sonnet',
@@ -10,43 +14,15 @@ const ENGINE_DEFAULTS: Record<string, string> = {
   gemini: 'gemini-2.5-pro',
 };
 
-const PERMISSION_PRESETS: Record<string, { allow?: string[]; deny?: string[] }> = {
-  'Full — can push, create PRs': {
-    allow: ['git push', 'gh pr create'],
-    deny: ['gh pr merge'],
-  },
-  'Developer — can edit files, no push': {
-    deny: ['git push', 'gh pr'],
-  },
-  'Read-only — no edits, no push': {
-    deny: ['git push', 'gh pr', 'Edit', 'Write'],
-  },
-};
-
 const AVATAR_KEYS = ['robot', 'crown', 'brain', 'gear', 'palette', 'shield', 'eye', 'test', 'book'];
 
-const MBTI_PRESETS: Record<string, string> = {
-  'ENTJ — Strategist, decisive, big-picture leader': 'ENTJ — Strategist, decisive, big-picture leader',
-  'ISTJ — Rule-follower, systematic, accuracy-focused': 'ISTJ — Rule-follower, systematic, accuracy-focused',
-  'ENFJ — People-oriented, empathetic, team harmony': 'ENFJ — People-oriented, empathetic, team harmony',
-  'INTP — Analytical, logical, deep explorer': 'INTP — Analytical, logical, deep explorer',
-  'Custom': '',
-};
-
-const SPEECH_PRESETS: Record<string, string> = {
-  'Formal to everyone': [
-    '  - To the human: formal and respectful',
-    '  - To the leader: formal and respectful',
-    '  - To other agents: polite and professional',
-  ].join('\n'),
-  'Formal to human + casual to peers': [
-    '  - To the human: strictly formal and respectful',
-    '  - To other agents: casual and direct',
-  ].join('\n'),
-  'Custom': '',
-};
-
 export async function runAdd(): Promise<void> {
+  // Language selection if --lang not specified
+  if (!isLangExplicit()) {
+    const useKo = await confirm(t('lang.prompt'), false);
+    if (useKo) setLang('ko', true);
+  }
+
   const ws = requireWorkspace();
   const teamsJsonPath = path.join(ws, 'teams.json');
   const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
@@ -54,40 +30,42 @@ export async function runAdd(): Promise<void> {
   // Load humanTitle from config for prompt generation
   const humanTitle: string = raw.humanTitle ?? 'Boss';
 
-  console.log('Add a new agent\n');
+  console.log(t('add.title'));
 
   // --- Identity ---
-  console.log('── Identity ──');
-  const id = await ask('Assistant ID (lowercase, e.g. hr)');
+  console.log(t('add.identity'));
+  const id = await ask(t('add.askId'));
   if (!id || !/^[a-z][a-z0-9_-]*$/.test(id)) {
-    console.error('ID must be lowercase alphanumeric (start with letter).');
+    console.error(t('add.badId'));
     process.exit(1);
   }
   if (raw.teams[id]) {
-    console.error(`Assistant "${id}" already exists.`);
+    console.error(`"${id}" ${t('add.dupId')}`);
     process.exit(1);
   }
 
-  const name = await ask('Display name (e.g. Backend)', id.charAt(0).toUpperCase() + id.slice(1));
-  const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
+  const name = await ask(t('add.askName'), id.charAt(0).toUpperCase() + id.slice(1));
+  const isLeader = await confirm(t('add.askLeader'), false);
 
   // --- Character ---
-  console.log('\n── Character ──');
+  console.log(t('add.character'));
 
   // MBTI
+  const MBTI_PRESETS = getMbtiPresets();
   const mbtiNames = Object.keys(MBTI_PRESETS);
-  const mbtiChoice = await choose('MBTI:', mbtiNames, 0);
+  const mbtiChoice = await choose(t('shared.mbti'), mbtiNames, 0);
   let mbti = MBTI_PRESETS[mbtiChoice];
   if (!mbti) {
-    mbti = await ask('MBTI (e.g. ISFJ — Diligent, caring, executor)');
+    mbti = await ask(t('add.askMbtiCustom'));
   }
 
   // Speech style
+  const SPEECH_PRESETS = getSpeechPresets();
   const speechNames = Object.keys(SPEECH_PRESETS);
-  const speechChoice = await choose('Speech style:', speechNames, 0);
+  const speechChoice = await choose(t('shared.speech'), speechNames, 0);
   let speechStyle = SPEECH_PRESETS[speechChoice];
   if (!speechStyle) {
-    console.log('Enter speech style line by line (empty line to finish):');
+    console.log(t('add.speechCustom'));
     const lines: string[] = [];
     let line = await ask('  ');
     while (line) {
@@ -98,94 +76,95 @@ export async function runAdd(): Promise<void> {
   }
 
   // Traits
-  console.log('Personality traits (with behavior examples, comma-separated):');
-  console.log('  e.g. "Systematic — structures all requirements, Cautious — verifies when unsure"');
-  const traitsStr = await ask('  Traits', '');
+  console.log(t('add.askTraits'));
+  console.log(t('add.traitsEx'));
+  const traitsStr = await ask(t('shared.traits'), '');
   const traits = traitsStr
     ? traitsStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // Habits
-  console.log('Habits (comma-separated):');
-  console.log('  e.g. "Reports in conclusion→evidence→next-steps order, Ends delegations with clear directives"');
-  const habitsStr = await ask('  Habits', '');
+  console.log(t('add.askHabits'));
+  console.log(t('add.habitsEx'));
+  const habitsStr = await ask(t('shared.habits'), '');
   const habits = habitsStr
     ? habitsStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // --- Role ---
-  console.log('\n── Role ──');
-  const role = await ask('Core role (1-2 sentences)');
+  console.log(t('add.role'));
+  const role = await ask(t('add.askRole'));
 
-  console.log('Scope (comma-separated):');
-  const scopeStr = await ask('  Scope', '');
+  console.log(t('add.askScope'));
+  const scopeStr = await ask(t('shared.scope'), '');
   const scope = scopeStr
     ? scopeStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
-  console.log('Not in scope (comma-separated):');
-  const notScopeStr = await ask('  Not in scope', '');
+  console.log(t('add.askNotScope'));
+  const notScopeStr = await ask(t('shared.notScope'), '');
   const notScope = notScopeStr
     ? notScopeStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
-  const authorityIndependent = await ask('Independent decisions', '');
-  const authorityNeedsApproval = await ask('Needs approval for', '');
+  const authorityIndependent = await ask(t('add.askAuthIndep'), '');
+  const authorityNeedsApproval = await ask(t('add.askAuthApproval'), '');
 
   // Expertise
-  console.log('Expertise (comma-separated):');
-  const expertiseStr = await ask('  Expertise', '');
+  console.log(t('add.askExpertise'));
+  const expertiseStr = await ask(t('shared.expertise'), '');
   const expertise = expertiseStr
     ? expertiseStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // Custom rules
-  console.log('Additional rules (comma-separated):');
-  const rulesStr = await ask('  Rules', '');
+  console.log(t('add.askRules'));
+  const rulesStr = await ask(t('shared.rules'), '');
   const rules = rulesStr
     ? rulesStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // Agent teams
-  const useTeams = await confirm('Enable agent team mode (parallel sub-agents)?', false);
+  const useTeams = await confirm(t('add.askTeams'), false);
   let teamRules: string[] = [];
   if (useTeams) {
-    console.log('Team rules (comma-separated):');
-    const teamRulesStr = await ask('  Team rules', '');
+    console.log(t('add.askTeamRules'));
+    const teamRulesStr = await ask(t('shared.teamRules'), '');
     teamRules = teamRulesStr
       ? teamRulesStr.split(',').map(s => s.trim()).filter(Boolean)
       : [];
   }
 
   // --- Engine ---
-  console.log('\n── Engine ──');
+  console.log(t('add.engine'));
   const engine = await choose('Engine:', ['claude', 'codex', 'gemini'], 0);
-  const model = await ask('Model', ENGINE_DEFAULTS[engine] ?? 'sonnet');
-  const budgetStr = await ask('Max budget per invocation ($)', '10');
+  const model = await ask(t('add.askModel'), ENGINE_DEFAULTS[engine] ?? 'sonnet');
+  const budgetStr = await ask(t('add.askBudget'), '10');
   const maxBudget = parseFloat(budgetStr) || 10;
 
   // --- Tokens ---
-  console.log('\n── Tokens ──');
-  const discordToken = await ask('Discord bot token');
+  console.log(t('add.tokens'));
+  const discordToken = await ask(t('add.askToken'));
 
   // --- Channels ---
-  console.log('\n── Channels ──');
-  console.log('Channel IDs this bot responds in (comma-separated, empty = all channels):');
-  const channelsStr = await ask('  Channels', '');
+  console.log(t('add.channels'));
+  console.log(t('add.askChannels'));
+  const channelsStr = await ask(t('shared.channels'), '');
   const channels = channelsStr
     ? channelsStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // --- Permissions ---
-  console.log('\n── Permissions ──');
+  console.log(t('add.permissions'));
+  const PERMISSION_PRESETS = getPermissionPresets();
   const presetNames = Object.keys(PERMISSION_PRESETS);
-  const presetChoice = await choose('Permission preset:', presetNames, 1);
+  const presetChoice = await choose(t('shared.permPreset'), presetNames, 1);
   const permissions = PERMISSION_PRESETS[presetChoice] ?? {};
 
   // --- Git identity ---
-  console.log('\n── Git identity ──');
-  const gitName = await ask('Git author name', `${name} (mococo)`);
-  const gitEmail = await ask('Git author email', `${id}@users.noreply.github.com`);
+  console.log(t('add.git'));
+  const gitName = await ask(t('add.askGitName'), `${name} (mococo)`);
+  const gitEmail = await ask(t('add.askGitEmail'), `${id}@users.noreply.github.com`);
 
   // Pick an avatar
   const usedAvatars = new Set(Object.values(raw.teams as Record<string, any>).map((t: any) => t.avatar));
@@ -227,9 +206,9 @@ export async function runAdd(): Promise<void> {
     }));
   }
 
-  console.log(`\nAgent "${name}" (${id}) added successfully.`);
-  console.log(`  Config:  teams.json`);
-  console.log(`  Prompt:  prompts/${id}.md  (editable)`);
-  console.log(`  Tokens:  .env`);
-  console.log(`\nRun \`mococo start\` to launch.`);
+  console.log(`\n"${name}" (${id}) ${t('add.done')}`);
+  console.log(t('add.configLine'));
+  console.log(`${t('add.promptLine')}  prompts/${id}.md  (editable)`);
+  console.log(t('add.tokenLine'));
+  console.log(t('add.launch'));
 }
