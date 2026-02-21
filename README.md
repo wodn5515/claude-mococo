@@ -19,6 +19,14 @@ Assistant (bot): "On it. I'll create the auth routes and login form."
 npm install -g claude-mococo
 ```
 
+Or run directly without installing:
+
+```bash
+npx claude-mococo init
+npx claude-mococo add
+npx claude-mococo start
+```
+
 You also need at least one AI engine:
 
 ```bash
@@ -147,9 +155,10 @@ Or just run a single assistant. It's up to you.
 You can also set up manually by cloning the repo:
 
 ```bash
-git clone https://github.com/anthropics/claude-mococo.git
+git clone https://github.com/wodn5515/claude-mococo.git
 cd claude-mococo
 npm install
+npm run build
 ```
 
 Edit `teams.json` directly, create prompt files in `prompts/`, set tokens in `.env`, then `npm start`.
