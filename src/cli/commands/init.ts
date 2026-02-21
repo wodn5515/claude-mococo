@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ask, confirm, closeRL } from '../readline-utils.js';
+import { t, isLangExplicit, setLang } from '../i18n.js';
 
 function getPackageRoot(): string {
   // Resolve from dist/cli/commands/init.js → package root
@@ -23,18 +24,24 @@ function copyDir(src: string, dest: string): void {
 }
 
 export async function runInit(): Promise<void> {
+  // Language selection if --lang not specified
+  if (!isLangExplicit()) {
+    const useKo = await confirm(t('lang.prompt'), false);
+    if (useKo) setLang('ko', true);
+  }
+
   const cwd = process.cwd();
   const teamsJsonPath = path.join(cwd, 'teams.json');
   const isReinit = fs.existsSync(teamsJsonPath);
 
   if (isReinit) {
-    console.log('Existing workspace detected. Updating settings...\n');
+    console.log(t('init.existing'));
   } else {
-    console.log('Initializing workspace...\n');
+    console.log(t('init.fresh'));
   }
 
-  const channelId = await ask('Discord work channel ID (leave empty for all channels)');
-  const humanId = await ask('Your Discord user ID (right-click your name → Copy User ID)');
+  const channelId = await ask(t('init.askChannel'));
+  const humanId = await ask(t('init.askHumanId'));
 
   if (isReinit) {
     // Update existing teams.json — preserve teams, update global settings
@@ -112,23 +119,23 @@ export async function runInit(): Promise<void> {
     }
   } else if (!fs.existsSync(destHooks)) {
     fs.mkdirSync(destHooks, { recursive: true });
-    console.warn('Warning: hooks/ not found in package. You may need to copy them manually.');
+    console.warn(t('init.hooksWarn'));
   }
 
   closeRL();
 
   if (isReinit) {
-    console.log('\nWorkspace updated.');
-    console.log('  teams.json   — settings updated (assistants preserved)');
-    console.log('  .env         — channel/port updated (tokens preserved)');
-    console.log('  hooks/       — refreshed from package');
+    console.log(t('init.updated'));
+    console.log(t('init.updatedTeams'));
+    console.log(t('init.updatedEnv'));
+    console.log(t('init.updatedHooks'));
   } else {
-    console.log('\nWorkspace created:');
-    console.log('  teams.json   — assistant configuration');
-    console.log('  .env         — tokens and settings');
-    console.log('  prompts/     — personality files');
-    console.log('  repos/       — linked repositories');
-    console.log('  hooks/       — Claude Code hooks');
-    console.log('\nNext: run `mococo add` to add your first assistant.');
+    console.log(t('init.created'));
+    console.log(t('init.createdTeams'));
+    console.log(t('init.createdEnv'));
+    console.log(t('init.createdPrompts'));
+    console.log(t('init.createdRepos'));
+    console.log(t('init.createdHooks'));
+    console.log(t('init.next'));
   }
 }

@@ -3,6 +3,10 @@ import path from 'node:path';
 import { ask, confirm, choose, closeRL } from '../readline-utils.js';
 import { generatePrompt } from '../prompt-template.js';
 import { requireWorkspace } from '../workspace.js';
+import {
+  t, isLangExplicit, setLang,
+  getMbtiPresets, getSpeechPresets, getPermissionPresets, getEditFields,
+} from '../i18n.js';
 
 const ENGINE_DEFAULTS: Record<string, string> = {
   claude: 'sonnet',
@@ -10,56 +14,16 @@ const ENGINE_DEFAULTS: Record<string, string> = {
   gemini: 'gemini-2.5-pro',
 };
 
-const PERMISSION_PRESETS: Record<string, { allow?: string[]; deny?: string[] }> = {
-  'Full — can push, create PRs': {
-    allow: ['git push', 'gh pr create'],
-    deny: ['gh pr merge'],
-  },
-  'Developer — can edit files, no push': {
-    deny: ['git push', 'gh pr'],
-  },
-  'Read-only — no edits, no push': {
-    deny: ['git push', 'gh pr', 'Edit', 'Write'],
-  },
-};
-
-const MBTI_PRESETS: Record<string, string> = {
-  'ENTJ — Strategist, decisive, big-picture leader': 'ENTJ — Strategist, decisive, big-picture leader',
-  'ISTJ — Rule-follower, systematic, accuracy-focused': 'ISTJ — Rule-follower, systematic, accuracy-focused',
-  'ENFJ — People-oriented, empathetic, team harmony': 'ENFJ — People-oriented, empathetic, team harmony',
-  'INTP — Analytical, logical, deep explorer': 'INTP — Analytical, logical, deep explorer',
-  'Custom': '',
-};
-
-const SPEECH_PRESETS: Record<string, string> = {
-  'Formal to everyone': [
-    '  - To the human: formal and respectful',
-    '  - To the leader: formal and respectful',
-    '  - To other agents: polite and professional',
-  ].join('\n'),
-  'Formal to human + casual to peers': [
-    '  - To the human: strictly formal and respectful',
-    '  - To other agents: casual and direct',
-  ].join('\n'),
-  'Custom': '',
-};
-
-const EDIT_FIELDS = [
-  'name        — Display name',
-  'character   — MBTI, speech style, personality, habits',
-  'role        — Scope, authority, expertise',
-  'engine      — Engine and model',
-  'budget      — Max budget',
-  'channels    — Channel restrictions',
-  'permissions — Permission preset',
-  'git         — Git author identity',
-  'all         — Edit everything',
-];
-
 export async function runEdit(id: string): Promise<void> {
   if (!id) {
-    console.error('Usage: mococo edit <assistant-id>');
+    console.error(t('edit.usage'));
     process.exit(1);
+  }
+
+  // Language selection if --lang not specified
+  if (!isLangExplicit()) {
+    const useKo = await confirm(t('lang.prompt'), false);
+    if (useKo) setLang('ko', true);
   }
 
   const ws = requireWorkspace();
@@ -71,24 +35,25 @@ export async function runEdit(id: string): Promise<void> {
   const humanTitle: string = raw.humanTitle ?? 'Boss';
 
   if (!team) {
-    console.error(`Assistant "${id}" not found.`);
+    console.error(`"${id}" ${t('edit.notFound')}`);
     const ids = Object.keys(raw.teams);
     if (ids.length > 0) {
-      console.error(`Available: ${ids.join(', ')}`);
+      console.error(`${t('edit.available')} ${ids.join(', ')}`);
     }
     process.exit(1);
   }
 
-  console.log(`Editing assistant "${team.name}" (${id})\n`);
+  console.log(`${t('edit.title')} "${team.name}" (${id})\n`);
 
-  const fieldChoice = await choose('What to edit:', EDIT_FIELDS, 7);
+  const EDIT_FIELDS = getEditFields();
+  const fieldChoice = await choose(t('edit.what'), EDIT_FIELDS, 7);
   const field = fieldChoice.split(' ')[0];
 
   const editAll = field === 'all';
 
   // Name
   if (editAll || field === 'name') {
-    team.name = await ask('Display name', team.name);
+    team.name = await ask(t('add.askName'), team.name);
   }
 
   // Character & Role → regenerate prompt
@@ -108,20 +73,22 @@ export async function runEdit(id: string): Promise<void> {
 
   if (editAll || field === 'character' || field === 'role') {
     if (editAll || field === 'character') {
-      console.log('\n── Character ──');
+      console.log(t('add.character'));
 
+      const MBTI_PRESETS = getMbtiPresets();
       const mbtiNames = Object.keys(MBTI_PRESETS);
-      const mbtiChoice = await choose('MBTI:', mbtiNames, 0);
+      const mbtiChoice = await choose(t('shared.mbti'), mbtiNames, 0);
       mbti = MBTI_PRESETS[mbtiChoice];
       if (!mbti) {
-        mbti = await ask('MBTI (e.g. ISFJ — Diligent, caring, executor)');
+        mbti = await ask(t('add.askMbtiCustom'));
       }
 
+      const SPEECH_PRESETS = getSpeechPresets();
       const speechNames = Object.keys(SPEECH_PRESETS);
-      const speechChoice = await choose('Speech style:', speechNames, 0);
+      const speechChoice = await choose(t('shared.speech'), speechNames, 0);
       speechStyle = SPEECH_PRESETS[speechChoice];
       if (!speechStyle) {
-        console.log('Enter speech style line by line (empty line to finish):');
+        console.log(t('add.speechCustom'));
         const lines: string[] = [];
         let line = await ask('  ');
         while (line) {
@@ -131,39 +98,39 @@ export async function runEdit(id: string): Promise<void> {
         speechStyle = lines.join('\n');
       }
 
-      console.log('Personality traits (with behavior examples, comma-separated):');
-      const traitsStr = await ask('  Traits', '');
+      console.log(t('add.askTraits'));
+      const traitsStr = await ask(t('shared.traits'), '');
       traits = traitsStr ? traitsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      console.log('Habits (comma-separated):');
-      const habitsStr = await ask('  Habits', '');
+      console.log(t('add.askHabits'));
+      const habitsStr = await ask(t('shared.habits'), '');
       habits = habitsStr ? habitsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
     }
 
     if (editAll || field === 'role') {
-      console.log('\n── Role ──');
-      role = await ask('Core role (1-2 sentences)', '');
+      console.log(t('add.role'));
+      role = await ask(t('add.askRole'), '');
 
-      console.log('Scope (comma-separated):');
-      const scopeStr = await ask('  Scope', '');
+      console.log(t('add.askScope'));
+      const scopeStr = await ask(t('shared.scope'), '');
       scope = scopeStr ? scopeStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      console.log('Not in scope (comma-separated):');
-      const notScopeStr = await ask('  Not in scope', '');
+      console.log(t('add.askNotScope'));
+      const notScopeStr = await ask(t('shared.notScope'), '');
       notScope = notScopeStr ? notScopeStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      authorityIndependent = await ask('Independent decisions', '');
-      authorityNeedsApproval = await ask('Needs approval for', '');
+      authorityIndependent = await ask(t('add.askAuthIndep'), '');
+      authorityNeedsApproval = await ask(t('add.askAuthApproval'), '');
 
-      console.log('Expertise (comma-separated):');
-      const expertiseStr = await ask('  Expertise', '');
+      console.log(t('add.askExpertise'));
+      const expertiseStr = await ask(t('shared.expertise'), '');
       expertise = expertiseStr ? expertiseStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      console.log('Additional rules (comma-separated):');
-      const rulesStr = await ask('  Rules', '');
+      console.log(t('add.askRules'));
+      const rulesStr = await ask(t('shared.rules'), '');
       rules = rulesStr ? rulesStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-      isLeader = await confirm('Is this the leader?', team.isLeader ?? false);
+      isLeader = await confirm(t('shared.isLeader'), team.isLeader ?? false);
       if (isLeader) {
         team.isLeader = true;
       } else {
@@ -171,7 +138,7 @@ export async function runEdit(id: string): Promise<void> {
       }
     }
 
-    regeneratePrompt = await confirm('Regenerate persona file? (overwrites existing)', true);
+    regeneratePrompt = await confirm(t('edit.regen'), true);
   }
 
   // Engine
@@ -179,21 +146,21 @@ export async function runEdit(id: string): Promise<void> {
     const engine = await choose('Engine:', ['claude', 'codex', 'gemini'],
       ['claude', 'codex', 'gemini'].indexOf(team.engine));
     team.engine = engine;
-    team.model = await ask('Model', team.model ?? ENGINE_DEFAULTS[engine]);
+    team.model = await ask(t('add.askModel'), team.model ?? ENGINE_DEFAULTS[engine]);
   }
 
   // Budget
   if (editAll || field === 'budget') {
-    const budgetStr = await ask('Max budget per invocation ($)', String(team.maxBudget ?? 10));
+    const budgetStr = await ask(t('add.askBudget'), String(team.maxBudget ?? 10));
     team.maxBudget = parseFloat(budgetStr) || 10;
   }
 
   // Channels
   if (editAll || field === 'channels') {
     const current = (team.channels ?? []).join(', ');
-    console.log(`Current channels: ${current || '(all channels)'}`);
-    console.log('Channel IDs (comma-separated, empty = all channels):');
-    const channelsStr = await ask('  Channels', current);
+    console.log(`${t('shared.currentCh')} ${current || t('shared.allCh')}`);
+    console.log(t('shared.chGuide'));
+    const channelsStr = await ask(t('shared.channels'), current);
     const channels = channelsStr
       ? channelsStr.split(',').map((s: string) => s.trim()).filter(Boolean)
       : [];
@@ -206,16 +173,17 @@ export async function runEdit(id: string): Promise<void> {
 
   // Permissions
   if (editAll || field === 'permissions') {
+    const PERMISSION_PRESETS = getPermissionPresets();
     const presetNames = Object.keys(PERMISSION_PRESETS);
-    const presetChoice = await choose('Permission preset:', presetNames, 1);
+    const presetChoice = await choose(t('shared.permPreset'), presetNames, 1);
     team.permissions = PERMISSION_PRESETS[presetChoice] ?? {};
   }
 
   // Git identity
   if (editAll || field === 'git') {
     const git = team.git ?? {};
-    git.name = await ask('Git author name', git.name ?? `${team.name} (mococo)`);
-    git.email = await ask('Git author email', git.email ?? `${id}@users.noreply.github.com`);
+    git.name = await ask(t('add.askGitName'), git.name ?? `${team.name} (mococo)`);
+    git.email = await ask(t('add.askGitEmail'), git.email ?? `${id}@users.noreply.github.com`);
     team.git = git;
   }
 
@@ -240,8 +208,8 @@ export async function runEdit(id: string): Promise<void> {
       isLeader,
       humanTitle,
     }));
-    console.log(`  Persona regenerated: prompts/${id}.md`);
+    console.log(`${t('edit.regenDone')} prompts/${id}.md`);
   }
 
-  console.log(`\nAgent "${team.name}" (${id}) updated successfully.`);
+  console.log(`\n"${team.name}" (${id}) ${t('edit.done')}`);
 }

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
-const command = process.argv[2];
-const arg = process.argv[3];
+import { parseLangFlag } from './i18n.js';
+
+const args = parseLangFlag(process.argv.slice(2));
+const command = args[0];
+const arg = args[1];
 
 async function main(): Promise<void> {
   switch (command) {
@@ -59,6 +62,9 @@ Usage:
   mococo restart           Trigger rebuild + restart (use with dev)
   mococo list              List configured assistants
   mococo remove <id>       Remove an assistant
+
+Options:
+  --lang <en|ko>           Set CLI language (init, add, edit)
 
 Getting started:
   mkdir my-team && cd my-team
