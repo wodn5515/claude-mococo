@@ -26,22 +26,22 @@ const PERMISSION_PRESETS: Record<string, { allow?: string[]; deny?: string[] }> 
 const AVATAR_KEYS = ['robot', 'crown', 'brain', 'gear', 'palette', 'shield', 'eye', 'test', 'book'];
 
 const MBTI_PRESETS: Record<string, string> = {
-  'ENTJ — 전략가, 결단력, 큰 그림': 'ENTJ — 전략가, 결단력, 큰 그림을 보는 리더',
-  'ISTJ — 규칙 준수, 체계적, 정확성': 'ISTJ — 규칙 준수, 체계적, 정확성 중시',
-  'ENFJ — 사람 중심, 공감, 조직 조화': 'ENFJ — 사람 중심 사고, 조직 조화, 공감 능력',
-  'INTP — 분석적, 논리적, 탐구형': 'INTP — 분석적, 논리적, 깊이 있는 탐구형',
+  'ENTJ — Strategist, decisive, big-picture leader': 'ENTJ — Strategist, decisive, big-picture leader',
+  'ISTJ — Rule-follower, systematic, accuracy-focused': 'ISTJ — Rule-follower, systematic, accuracy-focused',
+  'ENFJ — People-oriented, empathetic, team harmony': 'ENFJ — People-oriented, empathetic, team harmony',
+  'INTP — Analytical, logical, deep explorer': 'INTP — Analytical, logical, deep explorer',
   'Custom': '',
 };
 
 const SPEECH_PRESETS: Record<string, string> = {
-  '모두 존댓말': [
-    '  - 회장님께: 존댓말. "회장님, ~입니다"',
-    '  - 대장코코에게: 존댓말. "대장님, ~입니다"',
-    '  - 다른 모코코에게: 존댓말. "{이름}코코님"',
+  'Formal to everyone': [
+    '  - To the human: formal and respectful',
+    '  - To the leader: formal and respectful',
+    '  - To other agents: polite and professional',
   ].join('\n'),
-  '회장님 존댓말 + 팀원 반말': [
-    '  - 회장님께: 철저한 존댓말. "회장님, ~입니다", "~드리겠습니다"',
-    '  - 다른 모코코들에게: 반말. "~해라", "~해봐", "~됐어?"',
+  'Formal to human + casual to peers': [
+    '  - To the human: strictly formal and respectful',
+    '  - To other agents: casual and direct',
   ].join('\n'),
   'Custom': '',
 };
@@ -51,7 +51,10 @@ export async function runAdd(): Promise<void> {
   const teamsJsonPath = path.join(ws, 'teams.json');
   const raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
 
-  console.log('Add a new 모코코\n');
+  // Load humanTitle from config for prompt generation
+  const humanTitle: string = raw.humanTitle ?? 'Boss';
+
+  console.log('Add a new agent\n');
 
   // --- Identity ---
   console.log('── Identity ──');
@@ -65,7 +68,7 @@ export async function runAdd(): Promise<void> {
     process.exit(1);
   }
 
-  const name = await ask('Display name (e.g. HR코코)', id.charAt(0).toUpperCase() + id.slice(1));
+  const name = await ask('Display name (e.g. Backend)', id.charAt(0).toUpperCase() + id.slice(1));
   const isLeader = await confirm('Is this the leader (responds to all messages)?', false);
 
   // --- Character ---
@@ -76,15 +79,15 @@ export async function runAdd(): Promise<void> {
   const mbtiChoice = await choose('MBTI:', mbtiNames, 0);
   let mbti = MBTI_PRESETS[mbtiChoice];
   if (!mbti) {
-    mbti = await ask('MBTI (e.g. ISFJ — 성실, 배려, 실행력)');
+    mbti = await ask('MBTI (e.g. ISFJ — Diligent, caring, executor)');
   }
 
   // Speech style
   const speechNames = Object.keys(SPEECH_PRESETS);
-  const speechChoice = await choose('말투:', speechNames, 0);
+  const speechChoice = await choose('Speech style:', speechNames, 0);
   let speechStyle = SPEECH_PRESETS[speechChoice];
   if (!speechStyle) {
-    console.log('말투를 줄별로 입력 (빈 줄로 종료):');
+    console.log('Enter speech style line by line (empty line to finish):');
     const lines: string[] = [];
     let line = await ask('  ');
     while (line) {
@@ -95,49 +98,49 @@ export async function runAdd(): Promise<void> {
   }
 
   // Traits
-  console.log('성격 특성 (행동 예시 포함, comma-separated):');
-  console.log('  예: "체계적 — 모든 요구사항을 구조화, 신중함 — 확실하지 않으면 확인"');
-  const traitsStr = await ask('  성격', '');
+  console.log('Personality traits (with behavior examples, comma-separated):');
+  console.log('  e.g. "Systematic — structures all requirements, Cautious — verifies when unsure"');
+  const traitsStr = await ask('  Traits', '');
   const traits = traitsStr
     ? traitsStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // Habits
-  console.log('습관 (comma-separated):');
-  console.log('  예: "보고 시 결론→근거→다음단계 순서, 위임 시 명령조로 마무리"');
-  const habitsStr = await ask('  습관', '');
+  console.log('Habits (comma-separated):');
+  console.log('  e.g. "Reports in conclusion→evidence→next-steps order, Ends delegations with clear directives"');
+  const habitsStr = await ask('  Habits', '');
   const habits = habitsStr
     ? habitsStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // --- Role ---
   console.log('\n── Role ──');
-  const role = await ask('핵심 역할 (1-2문장)');
+  const role = await ask('Core role (1-2 sentences)');
 
-  console.log('담당 범위 (comma-separated):');
-  const scopeStr = await ask('  담당', '');
+  console.log('Scope (comma-separated):');
+  const scopeStr = await ask('  Scope', '');
   const scope = scopeStr
     ? scopeStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
-  console.log('담당 아닌 것 (comma-separated):');
-  const notScopeStr = await ask('  비담당', '');
+  console.log('Not in scope (comma-separated):');
+  const notScopeStr = await ask('  Not in scope', '');
   const notScope = notScopeStr
     ? notScopeStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
-  const authorityIndependent = await ask('독립 결정 가능한 것', '');
-  const authorityNeedsApproval = await ask('승인 필요한 것', '');
+  const authorityIndependent = await ask('Independent decisions', '');
+  const authorityNeedsApproval = await ask('Needs approval for', '');
 
   // Expertise
-  console.log('전문 분야 (comma-separated):');
+  console.log('Expertise (comma-separated):');
   const expertiseStr = await ask('  Expertise', '');
   const expertise = expertiseStr
     ? expertiseStr.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
   // Custom rules
-  console.log('추가 규칙 (comma-separated):');
+  console.log('Additional rules (comma-separated):');
   const rulesStr = await ask('  Rules', '');
   const rules = rulesStr
     ? rulesStr.split(',').map(s => s.trim()).filter(Boolean)
@@ -182,7 +185,7 @@ export async function runAdd(): Promise<void> {
   // --- Git identity ---
   console.log('\n── Git identity ──');
   const gitName = await ask('Git author name', `${name} (mococo)`);
-  const gitEmail = await ask('Git author email', `mococo-${id}@users.noreply.github.com`);
+  const gitEmail = await ask('Git author email', `${id}@users.noreply.github.com`);
 
   // Pick an avatar
   const usedAvatars = new Set(Object.values(raw.teams as Record<string, any>).map((t: any) => t.avatar));
@@ -220,12 +223,13 @@ export async function runAdd(): Promise<void> {
       role, scope, notScope,
       authorityIndependent, authorityNeedsApproval,
       expertise, rules, isLeader,
+      humanTitle,
     }));
   }
 
-  console.log(`\n모코코 "${name}" (${id}) 추가 완료.`);
+  console.log(`\nAgent "${name}" (${id}) added successfully.`);
   console.log(`  Config:  teams.json`);
-  console.log(`  Prompt:  prompts/${id}.md  (직접 수정 가능)`);
+  console.log(`  Prompt:  prompts/${id}.md  (editable)`);
   console.log(`  Tokens:  .env`);
   console.log(`\nRun \`mococo start\` to launch.`);
 }

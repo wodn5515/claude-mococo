@@ -12,24 +12,27 @@ export interface PromptOptions {
   expertise: string[];
   rules: string[];
   isLeader: boolean;
+  humanTitle?: string;
 }
 
 export function generatePrompt(opts: PromptOptions): string {
+  const humanTitle = opts.humanTitle || 'Boss';
+
   const traitsBlock = opts.traits.length > 0
     ? opts.traits.map(t => `  - ${t}`).join('\n')
-    : '  - (페르소나 파일에서 직접 작성)';
+    : '  - (edit in persona file)';
 
   const habitsBlock = opts.habits.length > 0
     ? opts.habits.map(h => `  - ${h}`).join('\n')
-    : '  - (페르소나 파일에서 직접 작성)';
+    : '  - (edit in persona file)';
 
   const scopeBlock = opts.scope.length > 0
     ? opts.scope.map(s => `- ${s}`).join('\n')
-    : '- (페르소나 파일에서 직접 작성)';
+    : '- (edit in persona file)';
 
   const notScopeBlock = opts.notScope.length > 0
     ? opts.notScope.map(s => `- ${s}`).join('\n')
-    : '- (페르소나 파일에서 직접 작성)';
+    : '- (edit in persona file)';
 
   const expertiseBlock = opts.expertise.length > 0
     ? `\n## Expertise\n${opts.expertise.map(e => `- ${e}`).join('\n')}\n`
@@ -37,38 +40,38 @@ export function generatePrompt(opts: PromptOptions): string {
 
   const customRules = opts.rules.length > 0
     ? opts.rules.map(r => `- ${r}`).join('\n')
-    : '- (페르소나 파일에서 직접 작성)';
+    : '- (edit in persona file)';
 
   const leaderExtra = opts.isLeader
-    ? '\n- 채널의 모든 메시지에 반응 (@멘션뿐 아니라 전부)\n- 직접 작업 절대 금지 — 오직 위임과 보고만'
+    ? '\n- Respond to ALL channel messages (not just @mentions)\n- Never work directly — only delegate and report'
     : '';
 
   return `# ${opts.name}
 
 You are **${opts.name}**, an AI assistant on Discord.
-When addressing the human, always call them **회장님**.
+When addressing the human, always call them **${humanTitle}**.
 
 ## Character
 - **MBTI:** ${opts.mbti}
-- **말투:**
+- **Speech style:**
 ${opts.speechStyle}
-- **성격:**
+- **Personality:**
 ${traitsBlock}
-- **습관:**
+- **Habits:**
 ${habitsBlock}
 
 ## Role
 ${opts.role}
 
-**담당:**
+**Scope:**
 ${scopeBlock}
 
-**담당 아님:**
+**Not in scope:**
 ${notScopeBlock}
 
-**결정 권한:**
-- 독립 결정: ${opts.authorityIndependent || '(페르소나 파일에서 직접 작성)'}
-- 승인 필요: ${opts.authorityNeedsApproval || '(페르소나 파일에서 직접 작성)'}
+**Decision authority:**
+- Independent: ${opts.authorityIndependent || '(edit in persona file)'}
+- Needs approval: ${opts.authorityNeedsApproval || '(edit in persona file)'}
 ${expertiseBlock}
 ## Rules${leaderExtra}
 ${customRules}
