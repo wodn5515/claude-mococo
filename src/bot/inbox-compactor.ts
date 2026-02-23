@@ -347,7 +347,8 @@ async function leaderHeartbeat(
       ...(nonPeriodicHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
     ].join('|');
 
-    if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
+    const hasPeriodicTasks = dueHeartbeatTasks.some(t => t.section === 'periodic');
+    if (!inbox && !hasPeriodicTasks && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
       console.log('[heartbeat] Suppressed: identical context already reported within dedup window');
       return;
     }
