@@ -124,6 +124,28 @@ Or just run a single assistant. It's up to you.
 
 **Engines:** `"claude"` runs as a full agent (files, git, commands). `"codex"` and `"gemini"` run as text-only advisors.
 
+**Heartbeat & Scheduled Tasks:**
+
+The leader assistant runs a heartbeat every 3 minutes. If a `heartbeat.md` file exists in the workspace root, it is parsed for scheduled tasks:
+
+| Section | Frequency | Description |
+|---------|-----------|-------------|
+| `## Daily` | Once per day (first heartbeat) | Daily recurring tasks |
+| `## Weekly` | Once per week (Monday, first heartbeat) | Weekly recurring tasks |
+| `## Periodic` | Every heartbeat (3 min) | Lightweight monitoring tasks |
+| `## On-demand` | Manual trigger only | One-off or special tasks |
+
+Task format:
+```markdown
+- [ ] Task description @assignee
+```
+
+- `- [ ]` = active (processed by heartbeat)
+- `- [x]` = inactive (skipped)
+- `@assignee` = optional, routes to a specific assistant
+
+State is tracked in `.mococo/heartbeat-state.json` to avoid re-running daily/weekly tasks.
+
 ---
 
 ## Configuration Reference

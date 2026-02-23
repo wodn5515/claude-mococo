@@ -24,6 +24,112 @@ const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
 
+// ---------------------------------------------------------------------------
+// Heartbeat.md — scheduled tasks from file
+// ---------------------------------------------------------------------------
+
+interface HeartbeatTask {
+  section: 'daily' | 'weekly' | 'periodic' | 'on-demand';
+  content: string;
+  assignee: string | null;
+}
+
+interface HeartbeatState {
+  lastDaily: string | null;
+  lastWeekly: string | null;
+}
+
+function parseHeartbeatMd(ws: string): HeartbeatTask[] {
+  const heartbeatPath = path.resolve(ws, 'heartbeat.md');
+  let content: string;
+  try { content = fs.readFileSync(heartbeatPath, 'utf-8'); } catch { return []; }
+
+  const tasks: HeartbeatTask[] = [];
+  let currentSection: HeartbeatTask['section'] | null = null;
+
+  for (const line of content.split('\n')) {
+    const sectionMatch = line.match(/^##\s+(Daily|Weekly|Periodic|On-demand)/i);
+    if (sectionMatch) {
+      const s = sectionMatch[1].toLowerCase().replace('-', '-') as HeartbeatTask['section'];
+      if (['daily', 'weekly', 'periodic', 'on-demand'].includes(s)) {
+        currentSection = s;
+      }
+      continue;
+    }
+    if (!currentSection) continue;
+
+    // Active task: - [ ] content @assignee
+    const taskMatch = line.match(/^-\s*\[\s\]\s+(.+)/);
+    if (taskMatch) {
+      const fullContent = taskMatch[1].trim();
+      const assigneeMatch = fullContent.match(/@(\S+)/);
+      tasks.push({
+        section: currentSection,
+        content: fullContent.replace(/@\S+\s*/, '').trim(),
+        assignee: assigneeMatch ? assigneeMatch[1] : null,
+      });
+    }
+  }
+  return tasks;
+}
+
+function readHeartbeatState(ws: string): HeartbeatState {
+  const statePath = path.resolve(ws, '.mococo/heartbeat-state.json');
+  try {
+    return JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+  } catch {
+    return { lastDaily: null, lastWeekly: null };
+  }
+}
+
+function writeHeartbeatState(ws: string, state: HeartbeatState): void {
+  const statePath = path.resolve(ws, '.mococo/heartbeat-state.json');
+  try { atomicWriteSync(statePath, JSON.stringify(state, null, 2)); } catch {}
+}
+
+function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
+  const allTasks = parseHeartbeatMd(ws);
+  if (allTasks.length === 0) return [];
+
+  const state = readHeartbeatState(ws);
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon
+
+  const due: HeartbeatTask[] = [];
+  let dailyDue = false;
+  let weeklyDue = false;
+
+  // Check daily: due if not run today
+  if (!state.lastDaily || !state.lastDaily.startsWith(todayStr)) {
+    dailyDue = true;
+  }
+  // Check weekly: due if Monday and not run this week
+  if (dayOfWeek === 1 && (!state.lastWeekly || !state.lastWeekly.startsWith(todayStr))) {
+    weeklyDue = true;
+  }
+
+  for (const task of allTasks) {
+    switch (task.section) {
+      case 'periodic': due.push(task); break;
+      case 'daily': if (dailyDue) due.push(task); break;
+      case 'weekly': if (weeklyDue) due.push(task); break;
+      // on-demand: excluded from automatic heartbeat — requires explicit trigger
+    }
+  }
+  return due;
+}
+
+function formatHeartbeatReport(tasks: HeartbeatTask[]): string | null {
+  if (tasks.length === 0) return null;
+  const lines: string[] = [`${tasks.length}건 실행 예정:`];
+  for (const t of tasks) {
+    const assignee = t.assignee ? ` (@${t.assignee})` : '';
+    lines.push(`- [${t.section}] ${t.content}${assignee}`);
+  }
+  return lines.join('\n');
+}
+
 type InvocationHandler = (
   team: TeamConfig,
   triggerMsg: ConversationMessage,
@@ -83,6 +189,7 @@ function buildTriagePrompt(
   inbox: string,
   unresolvedCount: number,
   improvementReport: string | null,
+  heartbeatReport: string | null,
 ): string {
   return `You are a triage assistant. Decide if the leader coordinator needs to be woken up.
 
@@ -95,13 +202,17 @@ ${unresolvedCount > 0 ? `${unresolvedCount} team(s) have not reported back yet.`
 ## Improvement Report
 ${improvementReport || '(none)'}
 
+## Heartbeat Tasks (scheduled from heartbeat.md)
+${heartbeatReport || '(none)'}
+
 ## Rules
 - New human messages → INVOKE
 - Team reports/delegation requests → INVOKE
 - Unresolved dispatches (5min+) → INVOKE
 - High severity improvement issues → INVOKE (include issue details in reason)
 - Medium/low only improvement issues → NO (다음 정기 리뷰에서 처리)
-- Empty inbox + no unresolved + no high issues → NO
+- Heartbeat tasks (periodic/daily/weekly) → INVOKE (include task summary in reason)
+- Empty inbox + no unresolved + no high issues + no heartbeat tasks → NO
 
 Output ONE line:
 INVOKE: (reason summary in Korean, 1 line)
@@ -209,14 +320,20 @@ async function leaderHeartbeat(
       }
     }
 
+    // Gather heartbeat.md scheduled tasks
+    const dueHeartbeatTasks = getDueHeartbeatTasks(ws);
+    const heartbeatReport = formatHeartbeatReport(dueHeartbeatTasks);
+
     // Nothing to evaluate
-    if (!inbox && unresolved.length === 0 && !improvementReport) return;
+    if (!inbox && unresolved.length === 0 && !improvementReport && !heartbeatReport) return;
 
     // Dedup check — suppress if same dispatches + issues were already reported recently
     const heartbeatFp = [
       ...unresolved.map(r => r.id).sort(),
       '||',
       ...highIssueKeys.sort(),
+      '||',
+      ...(dueHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
     ].join('|');
 
     if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
@@ -225,7 +342,7 @@ async function leaderHeartbeat(
     }
 
     // Haiku triage
-    const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport);
+    const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport, heartbeatReport);
     const triageResult = await runHaiku(triagePrompt);
 
     if (triageResult.startsWith('NO')) {
@@ -256,6 +373,20 @@ async function leaderHeartbeat(
     // Update heartbeat dedup state
     lastHeartbeatFingerprint = heartbeatFp;
     lastHeartbeatInvokeAt = Date.now();
+
+    // Update heartbeat.md state tracking (mark daily/weekly as executed)
+    if (dueHeartbeatTasks.length > 0) {
+      const hasDaily = dueHeartbeatTasks.some(t => t.section === 'daily');
+      const hasWeekly = dueHeartbeatTasks.some(t => t.section === 'weekly');
+      if (hasDaily || hasWeekly) {
+        const state = readHeartbeatState(ws);
+        const nowIso = new Date().toISOString();
+        if (hasDaily) state.lastDaily = nowIso;
+        if (hasWeekly) state.lastWeekly = nowIso;
+        writeHeartbeatState(ws, state);
+      }
+    }
+
     // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
     console.error(`[heartbeat] Error: ${err}`);

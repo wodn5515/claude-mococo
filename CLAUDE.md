@@ -36,3 +36,17 @@ Types: `feat.`, `fix.`, `refactor.`, `style.`, `docs.`, `chore.`, `test.`
 - Always `cd repos/<name>` before working
 - Check out the correct branch before making changes
 - Commit each logical unit separately
+
+## Heartbeat Scheduled Tasks
+
+The leader's heartbeat (every 3 minutes) reads `heartbeat.md` in the workspace root and executes due tasks.
+
+**Sections:** `Daily` (once/day), `Weekly` (Monday), `Periodic` (every heartbeat), `On-demand` (manual only).
+
+**Task format:** `- [ ] description @assignee` — unchecked = active, checked = skipped.
+
+**State file:** `.mococo/heartbeat-state.json` tracks `lastDaily` and `lastWeekly` timestamps to prevent re-execution.
+
+**Code location:** `src/bot/inbox-compactor.ts` — functions `parseHeartbeatMd`, `getDueHeartbeatTasks`, `readHeartbeatState`, `writeHeartbeatState`, `formatHeartbeatReport`.
+
+**Flow:** Parse tasks → check due conditions → format report → Haiku triage decides whether to invoke leader → leader processes tasks if invoked.
