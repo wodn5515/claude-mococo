@@ -50,7 +50,7 @@ function parseHeartbeatMd(ws: string): HeartbeatTask[] {
   for (const line of content.split('\n')) {
     const sectionMatch = line.match(/^##\s+(Daily|Weekly|Periodic|On-demand)/i);
     if (sectionMatch) {
-      const s = sectionMatch[1].toLowerCase().replace('-', '-') as HeartbeatTask['section'];
+      const s = sectionMatch[1].toLowerCase() as HeartbeatTask['section'];
       if (['daily', 'weekly', 'periodic', 'on-demand'].includes(s)) {
         currentSection = s;
       }
@@ -84,7 +84,11 @@ function readHeartbeatState(ws: string): HeartbeatState {
 
 function writeHeartbeatState(ws: string, state: HeartbeatState): void {
   const statePath = path.resolve(ws, '.mococo/heartbeat-state.json');
-  try { atomicWriteSync(statePath, JSON.stringify(state, null, 2)); } catch {}
+  try {
+    atomicWriteSync(statePath, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.error(`[heartbeat] Failed to write heartbeat state: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
@@ -104,8 +108,13 @@ function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
   if (!state.lastDaily || !state.lastDaily.startsWith(todayStr)) {
     dailyDue = true;
   }
-  // Check weekly: due if Monday and not run this week
-  if (dayOfWeek === 1 && (!state.lastWeekly || !state.lastWeekly.startsWith(todayStr))) {
+  // Check weekly: due if not yet run this week (Mon=1 ~ Sun=0)
+  // Calculates the Monday of the current week and checks if lastWeekly is before it
+  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // days since Monday
+  const monday = new Date(now);
+  monday.setDate(monday.getDate() - mondayOffset);
+  const mondayStr = monday.toISOString().slice(0, 10);
+  if (!state.lastWeekly || state.lastWeekly.slice(0, 10) < mondayStr) {
     weeklyDue = true;
   }
 
@@ -328,12 +337,14 @@ async function leaderHeartbeat(
     if (!inbox && unresolved.length === 0 && !improvementReport && !heartbeatReport) return;
 
     // Dedup check — suppress if same dispatches + issues were already reported recently
+    // NOTE: Periodic tasks are excluded from fingerprint — they run every heartbeat by design
+    const nonPeriodicHeartbeatTasks = dueHeartbeatTasks.filter(t => t.section !== 'periodic');
     const heartbeatFp = [
       ...unresolved.map(r => r.id).sort(),
       '||',
       ...highIssueKeys.sort(),
       '||',
-      ...(dueHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
+      ...(nonPeriodicHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
     ].join('|');
 
     if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
