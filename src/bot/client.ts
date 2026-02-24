@@ -101,7 +101,10 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
           clearTimeout(timeout);
           resolve();
         } catch (err) {
-          if (settled) return;
+          if (settled) {
+            console.warn(`[inbox-queue] Write for ${teamId} threw after timeout:`, err instanceof Error ? err.message : err);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           reject(err);

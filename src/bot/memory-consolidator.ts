@@ -171,6 +171,7 @@ async function compactEpisodes(teamId: string, teamName: string, config: TeamsCo
       console.log(`[memory-consolidator] ${teamName}: Self-healing — ${malformedCount}건 손상 라인 제거, ${validLines.length}건 유지`);
     } catch (err) {
       console.error(`[memory-consolidator] ${teamName}: Self-healing write failed: ${err instanceof Error ? err.message : err}`);
+      return; // 디스크와 메모리 상태 불일치 방지 — 다음 사이클에서 재시도
     }
     // 유효한 라인만으로 재분류
     old.length = 0;
@@ -202,7 +203,19 @@ ${oldSummaries}
 
 Output ONLY the summary lines (1-5 lines), nothing else.`;
 
-  const compactedSummary = await runHaiku(prompt);
+  let compactedSummary: string;
+  try {
+    compactedSummary = await runHaiku(prompt);
+  } catch (err) {
+    console.error(`[memory-consolidator] Haiku call failed for ${teamName}: ${err instanceof Error ? err.message : err}`);
+    return; // 에피소드 보존 — 다음 사이클에서 재시도
+  }
+
+  // Haiku 출력 검증 — 빈/불충분한 요약으로 기존 에피소드가 손실되는 것을 방지
+  if (!compactedSummary || compactedSummary.trim().length < 10) {
+    console.warn(`[memory-consolidator] Haiku returned insufficient summary for ${teamName} (${compactedSummary?.length ?? 0} chars), skipping compaction to prevent data loss`);
+    return;
+  }
 
   const compactedEpisode: Episode = {
     ts: lastOld.ts, // use last old episode's timestamp
@@ -214,9 +227,14 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
   };
 
   const newLines = [JSON.stringify(compactedEpisode), ...recent];
-  atomicWriteSync(filePath, newLines.join('\n') + '\n');
+  try {
+    atomicWriteSync(filePath, newLines.join('\n') + '\n');
+  } catch (err) {
+    console.error(`[memory-consolidator] Failed to write compacted episodes for ${teamName}: ${err instanceof Error ? err.message : err}`);
+    return; // 원본 파일은 atomicWriteSync 특성상 보존됨
+  }
 
-  console.log(`[memory-consolidator] Compacted ${old.length} old episodes for ${teamName} → 1 summary`);
+  console.log(`[memory-consolidator] Compacted ${old.length} old episodes for ${teamName} → 1 summary (${old.length} old → 1, ${recent.length} recent kept)`);
   });
 }
 
