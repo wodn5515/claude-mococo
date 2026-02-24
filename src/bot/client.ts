@@ -82,6 +82,7 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
       if (settled) return;
       settled = true;
       task.cancelled = true;
+      console.warn(`[inbox-queue] Timed out writing to ${teamId} inbox (30s)`);
       reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
     }, 30_000);
 
@@ -96,12 +97,15 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
           // Flatten multi-line content into single line to prevent summarizeInbox parse failures
           const flat = content.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ');
           await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${flat}\n`);
-          if (settled) return;
+          if (settled) return; // 타임아웃 후 완료된 쓰기 — reject 이미 호출됨
           settled = true;
           clearTimeout(timeout);
           resolve();
         } catch (err) {
-          if (settled) return;
+          if (settled) {
+            console.warn(`[inbox-queue] Write for ${teamId} failed after timeout:`, err instanceof Error ? err.message : err);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           reject(err);
@@ -290,9 +294,10 @@ function splitMessage(text: string, maxLen: number): string[] {
   let remaining = text;
   while (remaining.length > maxLen) {
     let splitAt = remaining.lastIndexOf('\n', maxLen);
-    if (splitAt <= 0) splitAt = maxLen;
+    if (splitAt < 1) splitAt = maxLen;
     chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
+    // 줄바꿈에서 분할 시 줄바꿈 문자를 소비하여 다음 청크 선두 \n 방지
+    remaining = remaining.slice(splitAt < maxLen ? splitAt + 1 : splitAt);
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
