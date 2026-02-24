@@ -258,10 +258,20 @@ function checkMemories(config: TeamsConfig): void {
   }
 }
 
+let delayTimer: ReturnType<typeof setTimeout> | null = null;
+let intervalTimer: ReturnType<typeof setInterval> | null = null;
+
 export function startMemoryConsolidator(config: TeamsConfig): void {
   console.log('[memory-consolidator] Started (interval: 6h)');
-  setTimeout(() => {
+  delayTimer = setTimeout(() => {
+    delayTimer = null;
     checkMemories(config);
-    setInterval(() => checkMemories(config), CONSOLIDATE_INTERVAL_MS);
+    intervalTimer = setInterval(() => checkMemories(config), CONSOLIDATE_INTERVAL_MS);
   }, 60_000);
+}
+
+export function stopMemoryConsolidator(): void {
+  if (delayTimer) { clearTimeout(delayTimer); delayTimer = null; }
+  if (intervalTimer) { clearInterval(intervalTimer); intervalTimer = null; }
+  console.log('[memory-consolidator] Stopped');
 }

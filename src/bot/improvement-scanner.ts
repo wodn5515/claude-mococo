@@ -595,12 +595,16 @@ function notifyLeaderOfNewIssues(
 // Main entry point -- start improvement scanner
 // ---------------------------------------------------------------------------
 
+let activeScanTimer: ReturnType<typeof setTimeout> | null = null;
+let scannerStopped = false;
+
 export function startImprovementScanner(
   config: TeamsConfig,
   triggerInvocation: InvocationTrigger,
   improvementChannelId?: string,
 ): void {
   console.log('[improvement-scanner] Started (interval: 30min, event-driven notify)');
+  scannerStopped = false;
 
   // Initialize previous issue keys from existing file
   const improvementPath = path.resolve(config.workspacePath, '.mococo/inbox/improvement.json');
@@ -636,7 +640,9 @@ export function startImprovementScanner(
 
   // Recursive setTimeout instead of setInterval to prevent overlapping
   function scheduleNextScan(): void {
-    setTimeout(() => {
+    if (scannerStopped) return;
+    activeScanTimer = setTimeout(() => {
+      activeScanTimer = null;
       runScanAndNotify()
         .catch(err => console.error(`[improvement-scanner] Unhandled error: ${err}`))
         .finally(() => scheduleNextScan());
@@ -644,9 +650,19 @@ export function startImprovementScanner(
   }
 
   // Run first scan after 2 minutes (let system settle), then schedule recurring
-  setTimeout(() => {
+  activeScanTimer = setTimeout(() => {
+    activeScanTimer = null;
     runScanAndNotify()
       .catch(err => console.error(`[improvement-scanner] Unhandled error: ${err}`))
       .finally(() => scheduleNextScan());
   }, 2 * 60_000);
+}
+
+export function stopImprovementScanner(): void {
+  scannerStopped = true;
+  if (activeScanTimer) {
+    clearTimeout(activeScanTimer);
+    activeScanTimer = null;
+  }
+  console.log('[improvement-scanner] Stopped');
 }
