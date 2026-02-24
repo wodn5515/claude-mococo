@@ -225,6 +225,7 @@ function buildScanPrompt(
       const escapedPath = JSON.stringify(f.filePath).slice(1, -1);
       const escapedContent = f.content
         .replace(/```/g, '` ` `')
+        .replace(/<file-content>/gi, '&lt;file-content&gt;')
         .replace(/<\/file-content>/gi, '&lt;/file-content&gt;');
       return `### ${escapedPath}\n<file-content>\n${escapedContent}\n</file-content>`;
     })

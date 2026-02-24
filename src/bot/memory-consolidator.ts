@@ -211,6 +211,12 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
 
   const compactedSummary = await runHaiku(prompt);
 
+  // Haiku 출력 검증 — 빈/불충분한 요약으로 기존 에피소드가 손실되는 것을 방지
+  if (!compactedSummary || compactedSummary.trim().length < 10) {
+    console.warn(`[memory-consolidator] Haiku returned insufficient summary for ${teamName} (${compactedSummary?.length ?? 0} chars), skipping compaction to prevent data loss`);
+    return;
+  }
+
   const compactedEpisode: Episode = {
     ts: lastOld.ts, // use last old episode's timestamp
     teamId,
