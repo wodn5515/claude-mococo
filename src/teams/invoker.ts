@@ -32,35 +32,54 @@ export async function invokeTeam(
 
   // Track last known cost from engine messages so timeout can report actual spend
   let lastKnownCost = 0;
-  engine.on('message', (event) => {
+
+  // Named listeners for cleanup after resolve/timeout
+  const onMessage = (event: any) => {
     if (typeof event.total_cost_usd === 'number') {
       lastKnownCost = event.total_cost_usd;
     }
-  });
+  };
+
+  /** Remove all listeners attached by this invocation to prevent accumulation */
+  function cleanupListeners() {
+    engine.off('message', onMessage);
+    engine.off('result', onResult);
+    engine.off('exit', onExit);
+  }
+
+  let onResult: (event: any) => void;
+  let onExit: (code: number) => void;
+
+  engine.on('message', onMessage);
 
   const enginePromise = new Promise<InvocationResult>((resolve, reject) => {
     let resolved = false;
 
-    engine.on('result', (event) => {
+    onResult = (event) => {
       resolved = true;
       resolve({
         teamId: team.id,
         output: event.result ?? '',
         cost: event.total_cost_usd ?? 0,
       });
-    });
+    };
 
-    engine.on('exit', (code) => {
+    onExit = (code) => {
       if (!resolved) {
         reject(new Error(`Team ${team.id} (${team.engine}) exited with code ${code}`));
       }
-    });
+    };
+
+    engine.on('result', onResult);
+    engine.on('exit', onExit);
 
     engine.start().catch(reject);
   });
 
+  let timeoutId: ReturnType<typeof setTimeout>;
+
   const timeoutPromise = new Promise<InvocationResult>((resolve) => {
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       engine.kill();
       console.warn(`[${team.id}] Timed out after ${INVOKE_TIMEOUT_MS / 1000}s (cost so far: $${lastKnownCost.toFixed(4)}) — returning partial result for continuation`);
       resolve({
@@ -72,5 +91,10 @@ export async function invokeTeam(
     }, INVOKE_TIMEOUT_MS);
   });
 
-  return Promise.race([enginePromise, timeoutPromise]);
+  try {
+    return await Promise.race([enginePromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId!);
+    cleanupListeners();
+  }
 }

@@ -373,6 +373,19 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       continue;
     }
 
+    // Destroy previous client instance to prevent resource leaks (listener accumulation, zombie WebSocket)
+    const existingClient = teamClients.get(team.id);
+    if (existingClient) {
+      console.log(`[${team.name}] Destroying previous client instance before recreation`);
+      existingClient.removeAllListeners();
+      try {
+        existingClient.destroy();
+      } catch (err) {
+        console.error(`[${team.name}] Failed to destroy old client:`, err);
+      }
+      teamClients.delete(team.id);
+    }
+
     const client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
