@@ -666,6 +666,22 @@ export function startInboxCompactor(
   const inboxDir = path.resolve(ws, '.mococo/inbox');
   fs.mkdirSync(inboxDir, { recursive: true });
 
+  // 재시작 시 기존 상태로 heartbeat fingerprint를 초기화하여 중복 알림 방지
+  try {
+    const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+    const raw = fs.readFileSync(improvementPath, 'utf-8');
+    const data = JSON.parse(raw) as { issues?: { file: string; repo: string; type: string; severity: string; description: string }[] };
+    const highIssueKeys = (data.issues ?? [])
+      .filter((i: { severity: string }) => i.severity === 'high')
+      .map((i: { repo: string; file: string; type: string }) => `${i.repo}/${i.file}:${i.type}`)
+      .sort();
+    lastHeartbeatFingerprint = ['||', ...highIssueKeys, '||'].join('|');
+    lastHeartbeatInvokeAt = Date.now();
+    console.log(`[inbox-compactor] Initialized heartbeat fingerprint from existing state (${highIssueKeys.length} high issues)`);
+  } catch {
+    // improvement.json 없음 — 정상. fingerprint는 null 유지
+  }
+
   let debounceTimer: NodeJS.Timeout | null = null;
   let pendingInboxInvoke = false;
 

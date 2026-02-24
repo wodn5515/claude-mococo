@@ -95,8 +95,13 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
           const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
           // Flatten multi-line content into single line to prevent summarizeInbox parse failures
           const flat = content.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ');
+          if (settled) return; // I/O 직전 재확인 — timeout race condition 방지
           await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${flat}\n`);
-          if (settled) return;
+          if (settled) {
+            // timeout 이후 write 완료 — 데이터는 기록됐지만 promise는 이미 reject됨
+            console.warn(`[inbox-queue] Write for ${teamId} completed after timeout — data written but promise already rejected`);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           resolve();
@@ -292,7 +297,9 @@ function splitMessage(text: string, maxLen: number): string[] {
     let splitAt = remaining.lastIndexOf('\n', maxLen);
     if (splitAt <= 0) splitAt = maxLen;
     chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
+    // 개행 위치에서 분할 시 개행 문자를 소비하여 다음 청크 앞의 빈 줄 방지
+    const skipNewline = splitAt < remaining.length && remaining[splitAt] === '\n';
+    remaining = remaining.slice(skipNewline ? splitAt + 1 : splitAt);
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
