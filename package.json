@@ -37,6 +37,7 @@
     "dev": "nodemon --watch src --ext ts,json --exec 'npm run build && node dist/cli/index.js start'",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -47,6 +48,7 @@
     "@types/node": "^22.0.0",
     "nodemon": "^3.1.11",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^4.0.18"
   }
 }
