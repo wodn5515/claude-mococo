@@ -636,13 +636,23 @@ async function pendingTaskLoop(
 // ---------------------------------------------------------------------------
 
 const activeTimers: ReturnType<typeof setInterval>[] = [];
+let inboxWatcher: fs.FSWatcher | null = null;
+let inboxDebounceTimer: NodeJS.Timeout | null = null;
 
 export function stopInboxCompactor(): void {
+  if (inboxWatcher) {
+    inboxWatcher.close();
+    inboxWatcher = null;
+  }
+  if (inboxDebounceTimer) {
+    clearTimeout(inboxDebounceTimer);
+    inboxDebounceTimer = null;
+  }
   for (const timer of activeTimers) {
     clearInterval(timer);
   }
   activeTimers.length = 0;
-  console.log('[inbox-compactor] Stopped all timers');
+  console.log('[inbox-compactor] Stopped all timers and watchers');
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +676,6 @@ export function startInboxCompactor(
   const inboxDir = path.resolve(ws, '.mococo/inbox');
   fs.mkdirSync(inboxDir, { recursive: true });
 
-  let debounceTimer: NodeJS.Timeout | null = null;
   let pendingInboxInvoke = false;
 
   const executeHeartbeat = () => {
@@ -710,10 +719,10 @@ export function startInboxCompactor(
   };
 
   try {
-    fs.watch(inboxDir, (eventType, filename) => {
+    inboxWatcher = fs.watch(inboxDir, (eventType, filename) => {
       if (filename !== `${leaderTeam.id}.md`) return;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
+      if (inboxDebounceTimer) clearTimeout(inboxDebounceTimer);
+      inboxDebounceTimer = setTimeout(() => {
         immediateLeaderInvoke().catch(err => {
           console.error(`[inbox-compactor] Immediate invoke error: ${err}`);
         });

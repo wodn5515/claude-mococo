@@ -61,11 +61,15 @@ export class CodexEngine extends BaseEngine {
 
     this.proc.on('error', (err) => {
       this.clearTimers();
+      stdoutRl.close();
+      stderrRl.close();
       console.error(`[codex:${this.opts.teamId}] spawn error: ${err.message}`);
     });
 
     this.proc.on('exit', (code) => {
       this.clearTimers();
+      stdoutRl.close();
+      stderrRl.close();
       const output = messages.join('\n').trim();
       console.log(`[codex:${this.opts.teamId}] exited with code ${code} (output: ${output.length} chars)`);
       this.emit('result', { type: 'result', result: output, total_cost_usd: 0 });
