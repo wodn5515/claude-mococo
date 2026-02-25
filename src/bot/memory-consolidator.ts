@@ -109,18 +109,15 @@ async function consolidateTeam(teamId: string, teamName: string, config: TeamsCo
 
     fs.mkdirSync(memoryDir, { recursive: true });
 
+    // Dual write: long-term 먼저, 실패 시 short-term도 스킵하여 일관성 유지
     try {
       if (result.longTerm) {
         atomicWriteSync(longTermPath, result.longTerm);
       }
-    } catch (err) {
-      console.error(`[memory-consolidator] Failed to write long-term for ${teamName}: ${err instanceof Error ? err.message : err}`);
-    }
-
-    try {
       atomicWriteSync(shortTermPath, result.shortTerm);
     } catch (err) {
-      console.error(`[memory-consolidator] Failed to write short-term for ${teamName}: ${err instanceof Error ? err.message : err}`);
+      console.error(`[memory-consolidator] Failed to write memory for ${teamName}, skipping to prevent inconsistency: ${err instanceof Error ? err.message : err}`);
+      return;
     }
 
     const promoted = result.longTerm && result.longTerm !== longTerm;

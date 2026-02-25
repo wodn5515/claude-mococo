@@ -652,7 +652,14 @@ export function stopInboxCompactor(): void {
     clearInterval(timer);
   }
   activeTimers.length = 0;
-  console.log('[inbox-compactor] Stopped all timers and watchers');
+  // 상태 초기화 — 재시작 시 이전 fingerprint로 dedup 오작동 방지
+  lastHeartbeatFingerprint = null;
+  lastHeartbeatInvokeAt = 0;
+  heartbeatRunning = false;
+  pendingTaskCooldowns.clear();
+  nudgeCounts.clear();
+  followUpCooldowns.clear();
+  console.log('[inbox-compactor] Stopped all timers and reset state');
 }
 
 // ---------------------------------------------------------------------------
