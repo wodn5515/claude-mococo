@@ -30,6 +30,10 @@ const MAX_TIMEOUT_CONTINUATIONS = 3; // Maximum re-invocations on timeout
 // Map teamId → their Discord client (so teams can send messages as themselves)
 export const teamClients = new Map<string, Client>();
 
+// Module-level interval tracking to prevent leaks on createBots() re-invocation
+let _msgCleanupInterval: ReturnType<typeof setInterval> | null = null;
+const _cleanupSignalHandlers: (() => void)[] = [];
+
 // ---------------------------------------------------------------------------
 // Inbox helpers — append chat to a team's inbox file for memory processing
 // ---------------------------------------------------------------------------
@@ -350,15 +354,35 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     }
   }
 
+  // Clear previous cleanup interval if createBots() is called again (hot reload)
+  if (_msgCleanupInterval !== null) {
+    clearInterval(_msgCleanupInterval);
+  }
+  for (const handler of _cleanupSignalHandlers) {
+    process.removeListener('SIGINT', handler);
+    process.removeListener('SIGTERM', handler);
+  }
+  _cleanupSignalHandlers.length = 0;
+
   // 주기적 정리: 2분마다 만료 항목 전체 제거
-  // Runs for entire process lifetime — no cleanup needed
-  setInterval(() => {
+  _msgCleanupInterval = setInterval(() => {
     try {
       cleanupExpiredEntries();
     } catch (err) {
       console.error('[processedMsgIds] Periodic cleanup failed:', err);
     }
   }, 2 * 60_000);
+
+  // Cleanup on process exit to prevent leaked timers
+  const clearCleanupInterval = () => {
+    if (_msgCleanupInterval !== null) {
+      clearInterval(_msgCleanupInterval);
+      _msgCleanupInterval = null;
+    }
+  };
+  _cleanupSignalHandlers.push(clearCleanupInterval);
+  process.once('SIGINT', clearCleanupInterval);
+  process.once('SIGTERM', clearCleanupInterval);
 
   // Forward hook events as team progress in Discord
   // Remove previous listeners to prevent accumulation on repeated createBots() calls
@@ -551,6 +575,14 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         if (!content) return;
 
         if (team.isLeader) {
+          // Claim message synchronously BEFORE any await to prevent race condition
+          // with non-leader handlers that could interleave during async operations
+          const isNewMsg = !processedMsgIds.has(msg.id);
+          if (isNewMsg) {
+            processedMsgIds.set(msg.id, Date.now());
+            evictOldestIfNeeded();
+          }
+
           if (await handleAdminCommand(content, msg, config)) return;
 
           const mentionsOtherBot = Object.values(config.teams).some(t =>
@@ -565,9 +597,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             timestamp: new Date(),
             mentions: findMentionedTeams(content, config).map(t => t.id),
           };
-          if (!processedMsgIds.has(msg.id)) {
-            processedMsgIds.set(msg.id, Date.now());
-            evictOldestIfNeeded();
+          if (isNewMsg) {
             addMessage(msg.channelId, humanMsg);
           }
 

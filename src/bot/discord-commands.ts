@@ -911,6 +911,10 @@ async function handleEditMemory(params: Record<string, string>, ctx: CommandCont
   if (!content) return;
 
   const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory', ctx.team.id);
+  if (!memoryDir.startsWith(ctx.config.workspacePath + path.sep)) {
+    console.error(`[discord-cmd] Path traversal detected in memory path: team.id="${ctx.team.id}"`);
+    return;
+  }
   fs.mkdirSync(memoryDir, { recursive: true });
   fs.writeFileSync(path.resolve(memoryDir, 'short-term.md'), content);
   console.log(`[discord-cmd] Updated short-term memory for ${ctx.team.name}`);
@@ -921,6 +925,10 @@ async function handleEditLongMemory(params: Record<string, string>, ctx: Command
   if (!content) return;
 
   const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory', ctx.team.id);
+  if (!memoryDir.startsWith(ctx.config.workspacePath + path.sep)) {
+    console.error(`[discord-cmd] Path traversal detected in long-memory path: team.id="${ctx.team.id}"`);
+    return;
+  }
   fs.mkdirSync(memoryDir, { recursive: true });
   fs.writeFileSync(path.resolve(memoryDir, 'long-term.md'), content);
   console.log(`[discord-cmd] Updated long-term memory for ${ctx.team.name}`);
