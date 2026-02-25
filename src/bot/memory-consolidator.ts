@@ -109,18 +109,25 @@ async function consolidateTeam(teamId: string, teamName: string, config: TeamsCo
 
     fs.mkdirSync(memoryDir, { recursive: true });
 
+    let longTermWriteOk = true;
     try {
       if (result.longTerm) {
         atomicWriteSync(longTermPath, result.longTerm);
       }
     } catch (err) {
+      longTermWriteOk = false;
       console.error(`[memory-consolidator] Failed to write long-term for ${teamName}: ${err instanceof Error ? err.message : err}`);
     }
 
-    try {
-      atomicWriteSync(shortTermPath, result.shortTerm);
-    } catch (err) {
-      console.error(`[memory-consolidator] Failed to write short-term for ${teamName}: ${err instanceof Error ? err.message : err}`);
+    // long-term 쓰기 실패 시 short-term도 갱신하지 않음 — promote된 항목이 양쪽에서 소실되는 것을 방지
+    if (!longTermWriteOk) {
+      console.warn(`[memory-consolidator] Skipping short-term write for ${teamName} — long-term write failed, preventing data loss`);
+    } else {
+      try {
+        atomicWriteSync(shortTermPath, result.shortTerm);
+      } catch (err) {
+        console.error(`[memory-consolidator] Failed to write short-term for ${teamName}: ${err instanceof Error ? err.message : err}`);
+      }
     }
 
     const promoted = result.longTerm && result.longTerm !== longTerm;
@@ -204,6 +211,12 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
 
   const compactedSummary = await runHaiku(prompt);
 
+  // Haiku 출력 검증 — 빈/불충분한 요약으로 기존 에피소드가 손실되는 것을 방지
+  if (!compactedSummary || compactedSummary.trim().length < 10) {
+    console.warn(`[memory-consolidator] Haiku returned insufficient summary for ${teamName} (${compactedSummary?.length ?? 0} chars), skipping compaction to prevent data loss`);
+    return;
+  }
+
   const compactedEpisode: Episode = {
     ts: lastOld.ts, // use last old episode's timestamp
     teamId,
@@ -214,7 +227,12 @@ Output ONLY the summary lines (1-5 lines), nothing else.`;
   };
 
   const newLines = [JSON.stringify(compactedEpisode), ...recent];
-  atomicWriteSync(filePath, newLines.join('\n') + '\n');
+  try {
+    atomicWriteSync(filePath, newLines.join('\n') + '\n');
+  } catch (err) {
+    console.error(`[memory-consolidator] Failed to write compacted episodes for ${teamName}: ${err instanceof Error ? err.message : err}`);
+    return; // 원본 파일은 atomicWriteSync 특성상 보존됨
+  }
 
   console.log(`[memory-consolidator] Compacted ${old.length} old episodes for ${teamName} → 1 summary`);
   });
@@ -258,10 +276,20 @@ function checkMemories(config: TeamsConfig): void {
   }
 }
 
+let delayTimer: ReturnType<typeof setTimeout> | null = null;
+let intervalTimer: ReturnType<typeof setInterval> | null = null;
+
 export function startMemoryConsolidator(config: TeamsConfig): void {
   console.log('[memory-consolidator] Started (interval: 6h)');
-  setTimeout(() => {
+  delayTimer = setTimeout(() => {
+    delayTimer = null;
     checkMemories(config);
-    setInterval(() => checkMemories(config), CONSOLIDATE_INTERVAL_MS);
+    intervalTimer = setInterval(() => checkMemories(config), CONSOLIDATE_INTERVAL_MS);
   }, 60_000);
+}
+
+export function stopMemoryConsolidator(): void {
+  if (delayTimer) { clearTimeout(delayTimer); delayTimer = null; }
+  if (intervalTimer) { clearInterval(intervalTimer); intervalTimer = null; }
+  console.log('[memory-consolidator] Stopped');
 }

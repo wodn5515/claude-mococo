@@ -28,7 +28,7 @@ const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
 // Heartbeat.md — scheduled tasks from file
 // ---------------------------------------------------------------------------
 
-interface HeartbeatTask {
+export interface HeartbeatTask {
   section: 'daily' | 'weekly' | 'periodic' | 'on-demand';
   content: string;
   assignee: string | null;
@@ -39,7 +39,7 @@ interface HeartbeatState {
   lastWeekly: string | null;
 }
 
-function parseHeartbeatMd(ws: string): HeartbeatTask[] {
+export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
   const heartbeatPath = path.resolve(ws, 'heartbeat.md');
   let content: string;
   try { content = fs.readFileSync(heartbeatPath, 'utf-8'); } catch { return []; }
@@ -91,7 +91,7 @@ function writeHeartbeatState(ws: string, state: HeartbeatState): void {
   }
 }
 
-function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
+export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): HeartbeatTask[] {
   const allTasks = parseHeartbeatMd(ws);
   if (allTasks.length === 0) return [];
 
@@ -120,7 +120,17 @@ function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
 
   for (const task of allTasks) {
     switch (task.section) {
-      case 'periodic': due.push(task); break;
+      case 'periodic':
+        // Skip periodic tasks whose assigned team is currently occupied
+        if (task.assignee && config) {
+          const team = Object.values(config.teams).find(t => t.name === task.assignee);
+          if (team && isOccupied(team.id)) {
+            console.log(`[heartbeat] Skipping periodic task: assignee "${task.assignee}" is occupied`);
+            break;
+          }
+        }
+        due.push(task);
+        break;
       case 'daily': if (dailyDue) due.push(task); break;
       case 'weekly': if (weeklyDue) due.push(task); break;
       // on-demand: excluded from automatic heartbeat — requires explicit trigger
@@ -329,8 +339,8 @@ async function leaderHeartbeat(
       }
     }
 
-    // Gather heartbeat.md scheduled tasks
-    const dueHeartbeatTasks = getDueHeartbeatTasks(ws);
+    // Gather heartbeat.md scheduled tasks (config passed for assignee occupancy check)
+    const dueHeartbeatTasks = getDueHeartbeatTasks(ws, config);
     const heartbeatReport = formatHeartbeatReport(dueHeartbeatTasks);
 
     // Nothing to evaluate
@@ -636,13 +646,30 @@ async function pendingTaskLoop(
 // ---------------------------------------------------------------------------
 
 const activeTimers: ReturnType<typeof setInterval>[] = [];
+let inboxWatcher: fs.FSWatcher | null = null;
+let inboxDebounceTimer: NodeJS.Timeout | null = null;
 
 export function stopInboxCompactor(): void {
+  if (inboxWatcher) {
+    inboxWatcher.close();
+    inboxWatcher = null;
+  }
+  if (inboxDebounceTimer) {
+    clearTimeout(inboxDebounceTimer);
+    inboxDebounceTimer = null;
+  }
   for (const timer of activeTimers) {
     clearInterval(timer);
   }
   activeTimers.length = 0;
-  console.log('[inbox-compactor] Stopped all timers');
+  // 상태 초기화 — 재시작 시 이전 fingerprint로 dedup 오작동 방지
+  lastHeartbeatFingerprint = null;
+  lastHeartbeatInvokeAt = 0;
+  heartbeatRunning = false;
+  pendingTaskCooldowns.clear();
+  nudgeCounts.clear();
+  followUpCooldowns.clear();
+  console.log('[inbox-compactor] Stopped all timers and reset state');
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +693,22 @@ export function startInboxCompactor(
   const inboxDir = path.resolve(ws, '.mococo/inbox');
   fs.mkdirSync(inboxDir, { recursive: true });
 
-  let debounceTimer: NodeJS.Timeout | null = null;
+  // 재시작 시 기존 상태로 heartbeat fingerprint를 초기화하여 중복 알림 방지
+  try {
+    const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+    const raw = fs.readFileSync(improvementPath, 'utf-8');
+    const data = JSON.parse(raw) as { issues?: { file: string; repo: string; type: string; severity: string; description: string }[] };
+    const highIssueKeys = (data.issues ?? [])
+      .filter((i: { severity: string }) => i.severity === 'high')
+      .map((i: { repo: string; file: string; type: string }) => `${i.repo}/${i.file}:${i.type}`)
+      .sort();
+    lastHeartbeatFingerprint = ['||', ...highIssueKeys, '||'].join('|');
+    lastHeartbeatInvokeAt = Date.now();
+    console.log(`[inbox-compactor] Initialized heartbeat fingerprint from existing state (${highIssueKeys.length} high issues)`);
+  } catch {
+    // improvement.json 없음 — 정상. fingerprint는 null 유지
+  }
+
   let pendingInboxInvoke = false;
 
   const executeHeartbeat = () => {
@@ -710,10 +752,10 @@ export function startInboxCompactor(
   };
 
   try {
-    fs.watch(inboxDir, (eventType, filename) => {
+    inboxWatcher = fs.watch(inboxDir, (eventType, filename) => {
       if (filename !== `${leaderTeam.id}.md`) return;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
+      if (inboxDebounceTimer) clearTimeout(inboxDebounceTimer);
+      inboxDebounceTimer = setTimeout(() => {
         immediateLeaderInvoke().catch(err => {
           console.error(`[inbox-compactor] Immediate invoke error: ${err}`);
         });

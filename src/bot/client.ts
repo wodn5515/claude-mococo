@@ -82,6 +82,7 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
       if (settled) return;
       settled = true;
       task.cancelled = true;
+      console.warn(`[inbox-queue] Timed out writing to ${teamId} inbox (30s)`);
       reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
     }, 30_000);
 
@@ -95,13 +96,21 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
           const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
           // Flatten multi-line content into single line to prevent summarizeInbox parse failures
           const flat = content.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ');
+          if (settled) return; // I/O 직전 재확인 — timeout race condition 방지
           await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${flat}\n`);
-          if (settled) return;
+          if (settled) {
+            // timeout 이후 write 완료 — 데이터는 기록됐지만 promise는 이미 reject됨
+            console.warn(`[inbox-queue] Write for ${teamId} completed after timeout — data written but promise already rejected`);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           resolve();
         } catch (err) {
-          if (settled) return;
+          if (settled) {
+            console.warn(`[inbox-queue] Write for ${teamId} failed after timeout:`, err instanceof Error ? err.message : err);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           reject(err);
@@ -290,9 +299,11 @@ function splitMessage(text: string, maxLen: number): string[] {
   let remaining = text;
   while (remaining.length > maxLen) {
     let splitAt = remaining.lastIndexOf('\n', maxLen);
-    if (splitAt <= 0) splitAt = maxLen;
+    if (splitAt < 1) splitAt = maxLen;
     chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
+    // 개행 위치에서 분할 시 개행 문자를 소비하여 다음 청크 앞의 빈 줄 방지
+    const skipNewline = splitAt < remaining.length && remaining[splitAt] === '\n';
+    remaining = remaining.slice(skipNewline ? splitAt + 1 : splitAt);
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
@@ -371,6 +382,19 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     if (!team.discordToken) {
       console.warn(`Team ${team.name} has no Discord token (${team.id.toUpperCase()}_DISCORD_TOKEN) — skipping`);
       continue;
+    }
+
+    // Destroy previous client instance to prevent resource leaks (listener accumulation, zombie WebSocket)
+    const existingClient = teamClients.get(team.id);
+    if (existingClient) {
+      console.log(`[${team.name}] Destroying previous client instance before recreation`);
+      existingClient.removeAllListeners();
+      try {
+        existingClient.destroy();
+      } catch (err) {
+        console.error(`[${team.name}] Failed to destroy old client:`, err);
+      }
+      teamClients.delete(team.id);
     }
 
     const client = new Client({

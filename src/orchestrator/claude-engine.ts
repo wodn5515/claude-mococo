@@ -77,6 +77,7 @@ export class ClaudeEngine extends BaseEngine {
 
     this.proc.on('error', (err) => {
       console.error(`[claude:${this.opts.teamId}] spawn error: ${err.message}`);
+      stderrRl.close();
       if (!procExited) {
         exitCode = 1;
         procExited = true;
@@ -87,6 +88,7 @@ export class ClaudeEngine extends BaseEngine {
 
     this.proc.on('exit', (code) => {
       console.log(`[claude:${this.opts.teamId}] exited with code ${code}`);
+      stderrRl.close();
       exitCode = code;
       procExited = true;
       maybeEmitExit();
