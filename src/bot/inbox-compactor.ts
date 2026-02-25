@@ -28,7 +28,7 @@ const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
 // Heartbeat.md — scheduled tasks from file
 // ---------------------------------------------------------------------------
 
-interface HeartbeatTask {
+export interface HeartbeatTask {
   section: 'daily' | 'weekly' | 'periodic' | 'on-demand';
   content: string;
   assignee: string | null;
@@ -39,7 +39,7 @@ interface HeartbeatState {
   lastWeekly: string | null;
 }
 
-function parseHeartbeatMd(ws: string): HeartbeatTask[] {
+export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
   const heartbeatPath = path.resolve(ws, 'heartbeat.md');
   let content: string;
   try { content = fs.readFileSync(heartbeatPath, 'utf-8'); } catch { return []; }
@@ -91,7 +91,7 @@ function writeHeartbeatState(ws: string, state: HeartbeatState): void {
   }
 }
 
-function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
+export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): HeartbeatTask[] {
   const allTasks = parseHeartbeatMd(ws);
   if (allTasks.length === 0) return [];
 
@@ -120,7 +120,17 @@ function getDueHeartbeatTasks(ws: string): HeartbeatTask[] {
 
   for (const task of allTasks) {
     switch (task.section) {
-      case 'periodic': due.push(task); break;
+      case 'periodic':
+        // Skip periodic tasks whose assigned team is currently occupied
+        if (task.assignee && config) {
+          const team = Object.values(config.teams).find(t => t.name === task.assignee);
+          if (team && isOccupied(team.id)) {
+            console.log(`[heartbeat] Skipping periodic task: assignee "${task.assignee}" is occupied`);
+            break;
+          }
+        }
+        due.push(task);
+        break;
       case 'daily': if (dailyDue) due.push(task); break;
       case 'weekly': if (weeklyDue) due.push(task); break;
       // on-demand: excluded from automatic heartbeat — requires explicit trigger
@@ -329,8 +339,8 @@ async function leaderHeartbeat(
       }
     }
 
-    // Gather heartbeat.md scheduled tasks
-    const dueHeartbeatTasks = getDueHeartbeatTasks(ws);
+    // Gather heartbeat.md scheduled tasks (config passed for assignee occupancy check)
+    const dueHeartbeatTasks = getDueHeartbeatTasks(ws, config);
     const heartbeatReport = formatHeartbeatReport(dueHeartbeatTasks);
 
     // Nothing to evaluate
