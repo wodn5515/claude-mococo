@@ -1,20 +1,44 @@
 {
   "name": "claude-mococo",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "AI Team Company on Discord — multi-engine AI agents as distinct team identities",
   "type": "module",
+  "license": "MIT",
+  "author": "wodn5515",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wodn5515/claude-mococo.git"
+  },
+  "homepage": "https://github.com/wodn5515/claude-mococo",
+  "keywords": [
+    "discord",
+    "bot",
+    "ai",
+    "claude",
+    "codex",
+    "gemini",
+    "assistant",
+    "team",
+    "agent"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "bin": {
     "mococo": "dist/cli/index.js"
   },
   "files": [
     "dist/",
-    "hooks/"
+    "hooks/",
+    "defaults/"
   ],
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "nodemon --watch src --ext ts,json --exec 'npm run build && node dist/cli/index.js start'",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "discord.js": "^14.16.0",
@@ -24,6 +48,7 @@
     "@types/node": "^22.0.0",
     "nodemon": "^3.1.11",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^4.0.18"
   }
 }

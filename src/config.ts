@@ -82,7 +82,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
       teamRules: cfg.teamRules,
       git: cfg.git ?? {
         name: `${cfg.name} (mococo)`,
-        email: `mococo-${id}@users.noreply.github.com`,
+        email: `${id}@users.noreply.github.com`,
       },
       discordToken,
       mcpServers,
@@ -96,6 +96,7 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
     conversationWindow: raw.conversationWindow ?? 30,
     workspacePath,
     humanDiscordId: raw.humanDiscordId,
+    humanTitle: raw.humanTitle ?? 'Boss',
   };
 }
 

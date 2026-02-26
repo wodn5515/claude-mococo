@@ -25,9 +25,14 @@ import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainCont
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CHAIN_BUDGET = 20;
+const MAX_TIMEOUT_CONTINUATIONS = 3; // Maximum re-invocations on timeout
 
 // Map teamId → their Discord client (so teams can send messages as themselves)
 export const teamClients = new Map<string, Client>();
+
+// Module-level interval tracking to prevent leaks on createBots() re-invocation
+let _msgCleanupInterval: ReturnType<typeof setInterval> | null = null;
+const _cleanupSignalHandlers: (() => void)[] = [];
 
 // ---------------------------------------------------------------------------
 // Inbox helpers — append chat to a team's inbox file for memory processing
@@ -81,6 +86,7 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
       if (settled) return;
       settled = true;
       task.cancelled = true;
+      console.warn(`[inbox-queue] Timed out writing to ${teamId} inbox (30s)`);
       reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
     }, 30_000);
 
@@ -94,13 +100,21 @@ export function appendToInbox(teamId: string, from: string, content: string, wor
           const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
           // Flatten multi-line content into single line to prevent summarizeInbox parse failures
           const flat = content.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ');
+          if (settled) return; // I/O 직전 재확인 — timeout race condition 방지
           await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${flat}\n`);
-          if (settled) return;
+          if (settled) {
+            // timeout 이후 write 완료 — 데이터는 기록됐지만 promise는 이미 reject됨
+            console.warn(`[inbox-queue] Write for ${teamId} completed after timeout — data written but promise already rejected`);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           resolve();
         } catch (err) {
-          if (settled) return;
+          if (settled) {
+            console.warn(`[inbox-queue] Write for ${teamId} failed after timeout:`, err instanceof Error ? err.message : err);
+            return;
+          }
           settled = true;
           clearTimeout(timeout);
           reject(err);
@@ -247,9 +261,9 @@ const registry = new ResourceRegistry();
 
 // Safety-net: strip any internal command blocks that should never reach Discord
 const INTERNAL_BLOCK_PATTERNS = [
-  /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}MEMORY-{3,}\s*\n[\s\S]*?\n-{3,}END-MEMORY-{3,}(?:\s*\n?```)?/g,
-  /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}LONG-MEMORY-{3,}\s*\n[\s\S]*?\n-{3,}END-LONG-MEMORY-{3,}(?:\s*\n?```)?/g,
-  /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}PERSONA-{3,}\s*\n[\s\S]*?\n-{3,}END-PERSONA-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}\s*\n?\s*MEMORY\s*-{3,}\s*\n[\s\S]*?\n\s*-{3,}\s*\n?\s*END-MEMORY\s*-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}\s*\n?\s*LONG-MEMORY\s*-{3,}\s*\n[\s\S]*?\n\s*-{3,}\s*\n?\s*END-LONG-MEMORY\s*-{3,}(?:\s*\n?```)?/g,
+  /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}\s*\n?\s*PERSONA\s*-{3,}\s*\n[\s\S]*?\n\s*-{3,}\s*\n?\s*END-PERSONA\s*-{3,}(?:\s*\n?```)?/g,
 ];
 
 function sanitizeForDiscord(text: string): string {
@@ -289,9 +303,11 @@ function splitMessage(text: string, maxLen: number): string[] {
   let remaining = text;
   while (remaining.length > maxLen) {
     let splitAt = remaining.lastIndexOf('\n', maxLen);
-    if (splitAt <= 0) splitAt = maxLen;
+    if (splitAt < 1) splitAt = maxLen;
     chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
+    // 개행 위치에서 분할 시 개행 문자를 소비하여 다음 청크 앞의 빈 줄 방지
+    const skipNewline = splitAt < remaining.length && remaining[splitAt] === '\n';
+    remaining = remaining.slice(skipNewline ? splitAt + 1 : splitAt);
   }
   if (remaining.length > 0) chunks.push(remaining);
   return chunks;
@@ -338,15 +354,35 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     }
   }
 
+  // Clear previous cleanup interval if createBots() is called again (hot reload)
+  if (_msgCleanupInterval !== null) {
+    clearInterval(_msgCleanupInterval);
+  }
+  for (const handler of _cleanupSignalHandlers) {
+    process.removeListener('SIGINT', handler);
+    process.removeListener('SIGTERM', handler);
+  }
+  _cleanupSignalHandlers.length = 0;
+
   // 주기적 정리: 2분마다 만료 항목 전체 제거
-  // Runs for entire process lifetime — no cleanup needed
-  setInterval(() => {
+  _msgCleanupInterval = setInterval(() => {
     try {
       cleanupExpiredEntries();
     } catch (err) {
       console.error('[processedMsgIds] Periodic cleanup failed:', err);
     }
   }, 2 * 60_000);
+
+  // Cleanup on process exit to prevent leaked timers
+  const clearCleanupInterval = () => {
+    if (_msgCleanupInterval !== null) {
+      clearInterval(_msgCleanupInterval);
+      _msgCleanupInterval = null;
+    }
+  };
+  _cleanupSignalHandlers.push(clearCleanupInterval);
+  process.once('SIGINT', clearCleanupInterval);
+  process.once('SIGTERM', clearCleanupInterval);
 
   // Forward hook events as team progress in Discord
   // Remove previous listeners to prevent accumulation on repeated createBots() calls
@@ -370,6 +406,19 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
     if (!team.discordToken) {
       console.warn(`Team ${team.name} has no Discord token (${team.id.toUpperCase()}_DISCORD_TOKEN) — skipping`);
       continue;
+    }
+
+    // Destroy previous client instance to prevent resource leaks (listener accumulation, zombie WebSocket)
+    const existingClient = teamClients.get(team.id);
+    if (existingClient) {
+      console.log(`[${team.name}] Destroying previous client instance before recreation`);
+      existingClient.removeAllListeners();
+      try {
+        existingClient.destroy();
+      } catch (err) {
+        console.error(`[${team.name}] Failed to destroy old client:`, err);
+      }
+      teamClients.delete(team.id);
     }
 
     const client = new Client({
@@ -526,6 +575,14 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         if (!content) return;
 
         if (team.isLeader) {
+          // Claim message synchronously BEFORE any await to prevent race condition
+          // with non-leader handlers that could interleave during async operations
+          const isNewMsg = !processedMsgIds.has(msg.id);
+          if (isNewMsg) {
+            processedMsgIds.set(msg.id, Date.now());
+            evictOldestIfNeeded();
+          }
+
           if (await handleAdminCommand(content, msg, config)) return;
 
           const mentionsOtherBot = Object.values(config.teams).some(t =>
@@ -540,9 +597,7 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             timestamp: new Date(),
             mentions: findMentionedTeams(content, config).map(t => t.id),
           };
-          if (!processedMsgIds.has(msg.id)) {
-            processedMsgIds.set(msg.id, Date.now());
-            evictOldestIfNeeded();
+          if (isNewMsg) {
             addMessage(msg.channelId, humanMsg);
           }
 
@@ -761,6 +816,7 @@ export async function handleTeamInvocation(
   config: TeamsConfig,
   env: EnvConfig,
   chain: ChainContext = newChain(),
+  continuationCount = 0,
 ) {
   // If already queued, don't pile on — drop with inbox fallback for leader
   if (isQueued(team.id)) {
@@ -784,6 +840,27 @@ export async function handleTeamInvocation(
   markBusy(team.id, triggerMsg.content.slice(0, 50));
   console.log(`[${team.name}] Invoking (chain: ${chain.totalInvocations}/${chain.maxBudget}, trigger: ${triggerMsg.content.slice(0, 80)})`);
 
+  try {
+    await executeInvocation(team, triggerMsg, channelId, config, env, chain, continuationCount);
+  } finally {
+    markFree(team.id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inner invocation logic — separated so timeout continuations can recurse
+// directly while the team stays busy (no markFree/markBusy gap = no race).
+// ---------------------------------------------------------------------------
+
+async function executeInvocation(
+  team: TeamConfig,
+  triggerMsg: ConversationMessage,
+  channelId: string,
+  config: TeamsConfig,
+  env: EnvConfig,
+  chain: ChainContext,
+  continuationCount: number,
+): Promise<void> {
   // Pre-read and atomically clear inbox for leader to prevent data loss.
   // Messages arriving during engine execution go to a fresh file and survive.
   let preloadedInbox: string | undefined;
@@ -815,7 +892,37 @@ export async function handleTeamInvocation(
       channelId,
     }, config, preloadedInbox);
 
-    console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)})`);
+    console.log(`[${team.name}] Done (output: ${result.output ? result.output.length + ' chars' : 'empty'}, cost: $${result.cost.toFixed(4)}${result.timedOut ? ', TIMED OUT' : ''})`);
+
+    // Handle timeout continuation — recurse directly while team stays busy
+    if (result.timedOut) {
+      if (continuationCount < MAX_TIMEOUT_CONTINUATIONS) {
+        console.log(`[${team.name}] Timeout detected, continuing (${continuationCount + 1}/${MAX_TIMEOUT_CONTINUATIONS})`);
+        await appendToInbox(
+          team.id,
+          'System',
+          `[시간 초과] 이전 작업이 시간 초과로 중단되었습니다. Short-term Memory를 확인하고 이어서 작업해주세요.`,
+          config.workspacePath,
+          channelId,
+        ).catch(() => {});
+
+        // Update busy status for observability
+        markBusy(team.id, `continuation ${continuationCount + 1}/${MAX_TIMEOUT_CONTINUATIONS}`);
+
+        const continuationMsg: ConversationMessage = {
+          teamId: 'system',
+          teamName: 'System',
+          content: `[보고 요청] 이전 작업 결과를 보고해주세요. 작업 내용: ${triggerMsg.content.slice(0, 200)}`,
+          timestamp: new Date(),
+          mentions: [team.id],
+        };
+        // Direct recursion — team stays busy, no markFree gap = no race with external triggers
+        return executeInvocation(team, continuationMsg, channelId, config, env, chain, continuationCount + 1);
+      }
+      console.warn(`[${team.name}] Max continuations reached (${MAX_TIMEOUT_CONTINUATIONS}), not retrying`);
+      await sendAsTeam(channelId, team, `작업이 시간 초과되었습니다. 다음 호출 시 메모리에서 이어서 작업합니다.`).catch(() => {});
+      return;
+    }
 
     // Strip memory/persona blocks
     let finalOutput = result.output;
@@ -870,21 +977,22 @@ export async function handleTeamInvocation(
     ledger.resolve(team.id, mentionedTeams.map(t => t.id));
 
     // ---------------------------------------------------------------------------
-    // Centralized dispatch: ONLY the leader dispatches to other teams.
-    // Non-leader output with mentions is routed to the leader's inbox so the
-    // leader can decide whether (and when) to invoke the mentioned teams.
+    // Dispatch: Leader dispatches to all mentioned teams directly.
+    // Non-leader dispatches to peer (non-leader) teams directly, while routing
+    // leader mentions through the leader's inbox for centralized handling.
     // ---------------------------------------------------------------------------
     if (finalOutput) {
       if (team.isLeader) {
         // Leader dispatches directly to mentioned teams
         dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
       } else {
-        // Non-leader: route mentions to leader inbox for centralized dispatch
+        // Non-leader: dispatch to peer teams directly + notify leader via inbox
         const mentionedInOutput = findMentionedTeams(result.output, config);
         const nonSelfMentions = mentionedInOutput.filter(
           t => t.id !== team.id && t.discordUserId !== config.humanDiscordId,
         );
         if (nonSelfMentions.length > 0) {
+          // Notify leader inbox for visibility
           const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
           if (leaderTeam) {
             appendToInbox(
@@ -895,13 +1003,8 @@ export async function handleTeamInvocation(
               channelId,
             ).catch(() => {});
           }
-          // Record and auto-resolve in ledger (non-leader report, no follow-up needed)
-          for (const target of nonSelfMentions) {
-            if (target.isLeader) {
-              const rec = ledger.record(chain.chainId, team.id, target.id, channelId, finalOutput.slice(0, 200));
-              ledger.resolveById(rec.id);
-            }
-          }
+          // Direct dispatch: invoke all mentioned targets (including leader) immediately
+          dispatchMentionedTeams(finalOutput, result.output, team, channelId, config, env, chain);
         }
       }
     }
@@ -911,12 +1014,11 @@ export async function handleTeamInvocation(
     await sendAsTeam(channelId, team, `Error: ${errorMsg}`).catch(() => {});
   } finally {
     clearInterval(typingInterval);
-    markFree(team.id);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Centralized dispatch — leader-only: invoke mentioned teams from leader output
+// Centralized dispatch — invoke mentioned teams from agent output
 // ---------------------------------------------------------------------------
 
 function dispatchMentionedTeams(

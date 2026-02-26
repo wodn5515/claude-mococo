@@ -6,6 +6,16 @@ export const hookEvents = new EventEmitter();
 
 const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
 
+let activeServer: http.Server | null = null;
+
+export function stopHookServer(): void {
+  if (activeServer) {
+    activeServer.close();
+    activeServer = null;
+    console.log('[hook-receiver] Server stopped');
+  }
+}
+
 export function startHookServer(port: number, secret?: string) {
   if (!secret) {
     console.warn('[hook-receiver] HOOK_SECRET not set — all requests will be rejected. Set HOOK_SECRET in .env');
@@ -71,5 +81,6 @@ export function startHookServer(port: number, secret?: string) {
     console.log(`Hook receiver listening on :${port}`);
   });
 
+  activeServer = server;
   return server;
 }

@@ -17,6 +17,7 @@ export async function runStart(): Promise<void> {
   const env: EnvConfig = {
     workChannelId: process.env.WORK_CHANNEL_ID || undefined,
     hookPort: parseInt(process.env.HOOK_PORT ?? '9876'),
+    hookSecret: process.env.HOOK_SECRET || undefined,
     memberTrackingChannelId: process.env.MEMBER_TRACKING_CHANNEL_ID || undefined,
   };
 
@@ -31,7 +32,7 @@ export async function runStart(): Promise<void> {
     process.exit(1);
   }
 
-  startHookServer(env.hookPort);
+  startHookServer(env.hookPort, env.hookSecret);
 
   console.log(`Starting ${teamsWithTokens.length} assistant(s)...`);
   await createBots(config, env);

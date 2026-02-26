@@ -7,9 +7,9 @@ import type { TeamConfig, TeamsConfig, EnvConfig } from '../types.js';
 // Strip memory/persona blocks — extracts content, saves to file, then strips
 // ---------------------------------------------------------------------------
 
-const MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?---MEMORY---\n([\s\S]*?)\n---END-MEMORY---(?:\s*\n?```)?/g;
-const LONG_MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?---LONG-MEMORY---\n([\s\S]*?)\n---END-LONG-MEMORY---(?:\s*\n?```)?/g;
-const PERSONA_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?---PERSONA---\n([\s\S]*?)\n---END-PERSONA---(?:\s*\n?```)?/g;
+const MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-memory\]\s*\n)?-{3,}\s*\n?\s*MEMORY\s*-{3,}\s*\n([\s\S]*?)\n\s*-{3,}\s*\n?\s*END-MEMORY\s*-{3,}(?:\s*\n?```)?/g;
+const LONG_MEMORY_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-long-memory\]\s*\n)?-{3,}\s*\n?\s*LONG-MEMORY\s*-{3,}\s*\n([\s\S]*?)\n\s*-{3,}\s*\n?\s*END-LONG-MEMORY\s*-{3,}(?:\s*\n?```)?/g;
+const PERSONA_PATTERN = /(?:```\s*\n?)?(?:\[discord:edit-persona\]\s*\n)?-{3,}\s*\n?\s*PERSONA\s*-{3,}\s*\n([\s\S]*?)\n\s*-{3,}\s*\n?\s*END-PERSONA\s*-{3,}(?:\s*\n?```)?/g;
 
 export function stripMemoryBlocks(
   output: string,
@@ -911,6 +911,10 @@ async function handleEditMemory(params: Record<string, string>, ctx: CommandCont
   if (!content) return;
 
   const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory', ctx.team.id);
+  if (!memoryDir.startsWith(ctx.config.workspacePath + path.sep)) {
+    console.error(`[discord-cmd] Path traversal detected in memory path: team.id="${ctx.team.id}"`);
+    return;
+  }
   fs.mkdirSync(memoryDir, { recursive: true });
   fs.writeFileSync(path.resolve(memoryDir, 'short-term.md'), content);
   console.log(`[discord-cmd] Updated short-term memory for ${ctx.team.name}`);
@@ -921,6 +925,10 @@ async function handleEditLongMemory(params: Record<string, string>, ctx: Command
   if (!content) return;
 
   const memoryDir = path.resolve(ctx.config.workspacePath, '.mococo/memory', ctx.team.id);
+  if (!memoryDir.startsWith(ctx.config.workspacePath + path.sep)) {
+    console.error(`[discord-cmd] Path traversal detected in long-memory path: team.id="${ctx.team.id}"`);
+    return;
+  }
   fs.mkdirSync(memoryDir, { recursive: true });
   fs.writeFileSync(path.resolve(memoryDir, 'long-term.md'), content);
   console.log(`[discord-cmd] Updated long-term memory for ${ctx.team.name}`);

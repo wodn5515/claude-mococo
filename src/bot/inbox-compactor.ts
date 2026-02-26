@@ -23,6 +23,154 @@ const HEARTBEAT_MS = 3 * 60_000;        // 3 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
+const PERIODIC_COOLDOWN_MS = 30 * 60_000;          // 30 minutes — periodic tasks cooldown
+
+// ---------------------------------------------------------------------------
+// Heartbeat.md — scheduled tasks from file
+// ---------------------------------------------------------------------------
+
+export interface HeartbeatTask {
+  section: 'daily' | 'weekly' | 'hourly' | 'periodic' | 'on-demand';
+  content: string;
+  assignee: string | null;
+}
+
+interface HeartbeatState {
+  lastDaily: string | null;
+  lastWeekly: string | null;
+  lastPeriodic: string | null;
+  lastHourly: string | null;
+}
+
+export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
+  const heartbeatPath = path.resolve(ws, 'heartbeat.md');
+  let content: string;
+  try { content = fs.readFileSync(heartbeatPath, 'utf-8'); } catch { return []; }
+
+  const tasks: HeartbeatTask[] = [];
+  let currentSection: HeartbeatTask['section'] | null = null;
+
+  for (const line of content.split('\n')) {
+    const sectionMatch = line.match(/^##\s+(Daily|Weekly|Hourly|Periodic|On-demand)/i);
+    if (sectionMatch) {
+      const s = sectionMatch[1].toLowerCase() as HeartbeatTask['section'];
+      if (['daily', 'weekly', 'hourly', 'periodic', 'on-demand'].includes(s)) {
+        currentSection = s;
+      }
+      continue;
+    }
+    if (!currentSection) continue;
+
+    // Active task: - [ ] content @assignee
+    const taskMatch = line.match(/^-\s*\[\s\]\s+(.+)/);
+    if (taskMatch) {
+      const fullContent = taskMatch[1].trim();
+      const assigneeMatch = fullContent.match(/@(\S+)/);
+      tasks.push({
+        section: currentSection,
+        content: fullContent.replace(/@\S+\s*/, '').trim(),
+        assignee: assigneeMatch ? assigneeMatch[1] : null,
+      });
+    }
+  }
+  return tasks;
+}
+
+function readHeartbeatState(ws: string): HeartbeatState {
+  const statePath = path.resolve(ws, '.mococo/heartbeat-state.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+    return {
+      lastDaily: data.lastDaily ?? null,
+      lastWeekly: data.lastWeekly ?? null,
+      lastPeriodic: data.lastPeriodic ?? null,
+      lastHourly: data.lastHourly ?? null,
+    };
+  } catch {
+    return { lastDaily: null, lastWeekly: null, lastPeriodic: null, lastHourly: null };
+  }
+}
+
+function writeHeartbeatState(ws: string, state: HeartbeatState): void {
+  const statePath = path.resolve(ws, '.mococo/heartbeat-state.json');
+  try {
+    atomicWriteSync(statePath, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.error(`[heartbeat] Failed to write heartbeat state: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): HeartbeatTask[] {
+  const allTasks = parseHeartbeatMd(ws);
+  if (allTasks.length === 0) return [];
+
+  const state = readHeartbeatState(ws);
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon
+
+  const due: HeartbeatTask[] = [];
+  let dailyDue = false;
+  let weeklyDue = false;
+  let periodicDue = false;
+  let hourlyDue = false;
+
+  // Check daily: due if not run today
+  if (!state.lastDaily || !state.lastDaily.startsWith(todayStr)) {
+    dailyDue = true;
+  }
+  // Check weekly: due if not yet run this week (Mon=1 ~ Sun=0)
+  // Calculates the Monday of the current week and checks if lastWeekly is before it
+  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // days since Monday
+  const monday = new Date(now);
+  monday.setDate(monday.getDate() - mondayOffset);
+  const mondayStr = monday.toISOString().slice(0, 10);
+  if (!state.lastWeekly || state.lastWeekly.slice(0, 10) < mondayStr) {
+    weeklyDue = true;
+  }
+  // Check periodic: due if not run within cooldown period (30 min)
+  if (!state.lastPeriodic || now.getTime() - new Date(state.lastPeriodic).getTime() >= PERIODIC_COOLDOWN_MS) {
+    periodicDue = true;
+  }
+  // Check hourly: due if not run in the current hour
+  // Compare YYYY-MM-DDTHH prefix to detect hour boundary
+  const currentHourPrefix = now.toISOString().slice(0, 13); // "YYYY-MM-DDTHH"
+  if (!state.lastHourly || !state.lastHourly.startsWith(currentHourPrefix)) {
+    hourlyDue = true;
+  }
+
+  for (const task of allTasks) {
+    switch (task.section) {
+      case 'periodic':
+        if (!periodicDue) break;
+        // Skip periodic tasks whose assigned team is currently occupied
+        if (task.assignee && config) {
+          const team = Object.values(config.teams).find(t => t.name === task.assignee);
+          if (team && isOccupied(team.id)) {
+            console.log(`[heartbeat] Skipping periodic task: assignee "${task.assignee}" is occupied`);
+            break;
+          }
+        }
+        due.push(task);
+        break;
+      case 'daily': if (dailyDue) due.push(task); break;
+      case 'weekly': if (weeklyDue) due.push(task); break;
+      case 'hourly': if (hourlyDue) due.push(task); break;
+      // on-demand: excluded from automatic heartbeat — requires explicit trigger
+    }
+  }
+  return due;
+}
+
+function formatHeartbeatReport(tasks: HeartbeatTask[]): string | null {
+  if (tasks.length === 0) return null;
+  const lines: string[] = [`${tasks.length}건 실행 예정:`];
+  for (const t of tasks) {
+    const assignee = t.assignee ? ` (@${t.assignee})` : '';
+    lines.push(`- [${t.section}] ${t.content}${assignee}`);
+  }
+  return lines.join('\n');
+}
 
 type InvocationHandler = (
   team: TeamConfig,
@@ -49,6 +197,11 @@ const MAX_NUDGES_PER_RECORD = 2;
 // Cooldown tracker for follow-up loop — tracks last nudge time per team
 const followUpCooldowns = new Map<string, number>();
 const FOLLOW_UP_COOLDOWN_MS = 30 * 60_000; // 30 minutes cooldown per team
+
+// Heartbeat dedup — suppress repeated invocations for identical context
+const HEARTBEAT_DEDUP_WINDOW_MS = 60 * 60_000; // 1 hour suppression window
+let lastHeartbeatFingerprint: string | null = null;
+let lastHeartbeatInvokeAt = 0;
 
 function isFollowUpOnCooldown(teamId: string): boolean {
   const lastNudge = followUpCooldowns.get(teamId);
@@ -78,6 +231,7 @@ function buildTriagePrompt(
   inbox: string,
   unresolvedCount: number,
   improvementReport: string | null,
+  heartbeatReport: string | null,
 ): string {
   return `You are a triage assistant. Decide if the leader coordinator needs to be woken up.
 
@@ -90,13 +244,17 @@ ${unresolvedCount > 0 ? `${unresolvedCount} team(s) have not reported back yet.`
 ## Improvement Report
 ${improvementReport || '(none)'}
 
+## Heartbeat Tasks (scheduled from heartbeat.md)
+${heartbeatReport || '(none)'}
+
 ## Rules
 - New human messages → INVOKE
 - Team reports/delegation requests → INVOKE
 - Unresolved dispatches (5min+) → INVOKE
 - High severity improvement issues → INVOKE (include issue details in reason)
 - Medium/low only improvement issues → NO (다음 정기 리뷰에서 처리)
-- Empty inbox + no unresolved + no high issues → NO
+- Heartbeat tasks (periodic/daily/weekly) → INVOKE (include task summary in reason)
+- Empty inbox + no unresolved + no high issues + no heartbeat tasks → NO
 
 Output ONE line:
 INVOKE: (reason summary in Korean, 1 line)
@@ -125,6 +283,7 @@ async function leaderHeartbeat(
     try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
 
     const unresolved = ledger.getUnresolved(5 * 60_000); // 5min+
+    const highIssueKeys: string[] = []; // for heartbeat dedup fingerprint
 
     let improvementReport: string | null = null;
     try {
@@ -178,6 +337,7 @@ async function leaderHeartbeat(
           lines.push('--- high ---');
           for (const i of high) {
             lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+            highIssueKeys.push(`${i.repo}/${i.file}:${i.type}`);
           }
         }
         if (medium.length > 0) {
@@ -202,11 +362,29 @@ async function leaderHeartbeat(
       }
     }
 
+    // Gather heartbeat.md scheduled tasks (config passed for assignee occupancy check)
+    const dueHeartbeatTasks = getDueHeartbeatTasks(ws, config);
+    const heartbeatReport = formatHeartbeatReport(dueHeartbeatTasks);
+
     // Nothing to evaluate
-    if (!inbox && unresolved.length === 0 && !improvementReport) return;
+    if (!inbox && unresolved.length === 0 && !improvementReport && !heartbeatReport) return;
+
+    // Dedup check — suppress if same dispatches + issues + heartbeat tasks were already reported recently
+    const heartbeatFp = [
+      ...unresolved.map(r => r.id).sort(),
+      '||',
+      ...highIssueKeys.sort(),
+      '||',
+      ...(dueHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
+    ].join('|');
+
+    if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
+      console.log('[heartbeat] Suppressed: identical context already reported within dedup window');
+      return;
+    }
 
     // Haiku triage
-    const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport);
+    const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport, heartbeatReport);
     const triageResult = await runHaiku(triagePrompt);
 
     if (triageResult.startsWith('NO')) {
@@ -234,6 +412,27 @@ async function leaderHeartbeat(
     };
     addMessage(channelId, systemMsg);
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
+    // Update heartbeat dedup state
+    lastHeartbeatFingerprint = heartbeatFp;
+    lastHeartbeatInvokeAt = Date.now();
+
+    // Update heartbeat.md state tracking (mark daily/weekly/periodic/hourly as executed)
+    if (dueHeartbeatTasks.length > 0) {
+      const hasDaily = dueHeartbeatTasks.some(t => t.section === 'daily');
+      const hasWeekly = dueHeartbeatTasks.some(t => t.section === 'weekly');
+      const hasPeriodic = dueHeartbeatTasks.some(t => t.section === 'periodic');
+      const hasHourly = dueHeartbeatTasks.some(t => t.section === 'hourly');
+      if (hasDaily || hasWeekly || hasPeriodic || hasHourly) {
+        const state = readHeartbeatState(ws);
+        const nowIso = new Date().toISOString();
+        if (hasDaily) state.lastDaily = nowIso;
+        if (hasWeekly) state.lastWeekly = nowIso;
+        if (hasPeriodic) state.lastPeriodic = nowIso;
+        if (hasHourly) state.lastHourly = nowIso;
+        writeHeartbeatState(ws, state);
+      }
+    }
+
     // Inbox is cleared inside handleTeamInvocation after buildTeamPrompt reads it
   } catch (err) {
     console.error(`[heartbeat] Error: ${err}`);
@@ -471,13 +670,30 @@ async function pendingTaskLoop(
 // ---------------------------------------------------------------------------
 
 const activeTimers: ReturnType<typeof setInterval>[] = [];
+let inboxWatcher: fs.FSWatcher | null = null;
+let inboxDebounceTimer: NodeJS.Timeout | null = null;
 
 export function stopInboxCompactor(): void {
+  if (inboxWatcher) {
+    inboxWatcher.close();
+    inboxWatcher = null;
+  }
+  if (inboxDebounceTimer) {
+    clearTimeout(inboxDebounceTimer);
+    inboxDebounceTimer = null;
+  }
   for (const timer of activeTimers) {
     clearInterval(timer);
   }
   activeTimers.length = 0;
-  console.log('[inbox-compactor] Stopped all timers');
+  // 상태 초기화 — 재시작 시 이전 fingerprint로 dedup 오작동 방지
+  lastHeartbeatFingerprint = null;
+  lastHeartbeatInvokeAt = 0;
+  heartbeatRunning = false;
+  pendingTaskCooldowns.clear();
+  nudgeCounts.clear();
+  followUpCooldowns.clear();
+  console.log('[inbox-compactor] Stopped all timers and reset state');
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +717,22 @@ export function startInboxCompactor(
   const inboxDir = path.resolve(ws, '.mococo/inbox');
   fs.mkdirSync(inboxDir, { recursive: true });
 
-  let debounceTimer: NodeJS.Timeout | null = null;
+  // 재시작 시 기존 상태로 heartbeat fingerprint를 초기화하여 중복 알림 방지
+  try {
+    const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+    const raw = fs.readFileSync(improvementPath, 'utf-8');
+    const data = JSON.parse(raw) as { issues?: { file: string; repo: string; type: string; severity: string; description: string }[] };
+    const highIssueKeys = (data.issues ?? [])
+      .filter((i: { severity: string }) => i.severity === 'high')
+      .map((i: { repo: string; file: string; type: string }) => `${i.repo}/${i.file}:${i.type}`)
+      .sort();
+    lastHeartbeatFingerprint = ['||', ...highIssueKeys, '||'].join('|');
+    lastHeartbeatInvokeAt = Date.now();
+    console.log(`[inbox-compactor] Initialized heartbeat fingerprint from existing state (${highIssueKeys.length} high issues)`);
+  } catch {
+    // improvement.json 없음 — 정상. fingerprint는 null 유지
+  }
+
   let pendingInboxInvoke = false;
 
   const executeHeartbeat = () => {
@@ -545,10 +776,10 @@ export function startInboxCompactor(
   };
 
   try {
-    fs.watch(inboxDir, (eventType, filename) => {
+    inboxWatcher = fs.watch(inboxDir, (eventType, filename) => {
       if (filename !== `${leaderTeam.id}.md`) return;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
+      if (inboxDebounceTimer) clearTimeout(inboxDebounceTimer);
+      inboxDebounceTimer = setTimeout(() => {
         immediateLeaderInvoke().catch(err => {
           console.error(`[inbox-compactor] Immediate invoke error: ${err}`);
         });
