@@ -23,6 +23,7 @@ const HEARTBEAT_MS = 3 * 60_000;        // 3 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
+const PERIODIC_COOLDOWN_MS = 30 * 60_000;          // 30 minutes — periodic tasks cooldown
 
 // ---------------------------------------------------------------------------
 // Heartbeat.md — scheduled tasks from file
@@ -37,6 +38,7 @@ export interface HeartbeatTask {
 interface HeartbeatState {
   lastDaily: string | null;
   lastWeekly: string | null;
+  lastPeriodic: string | null;
   lastHourly: string | null;
 }
 
@@ -77,9 +79,15 @@ export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
 function readHeartbeatState(ws: string): HeartbeatState {
   const statePath = path.resolve(ws, '.mococo/heartbeat-state.json');
   try {
-    return JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+    const data = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+    return {
+      lastDaily: data.lastDaily ?? null,
+      lastWeekly: data.lastWeekly ?? null,
+      lastPeriodic: data.lastPeriodic ?? null,
+      lastHourly: data.lastHourly ?? null,
+    };
   } catch {
-    return { lastDaily: null, lastWeekly: null, lastHourly: null };
+    return { lastDaily: null, lastWeekly: null, lastPeriodic: null, lastHourly: null };
   }
 }
 
@@ -104,6 +112,7 @@ export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): Heartbea
   const due: HeartbeatTask[] = [];
   let dailyDue = false;
   let weeklyDue = false;
+  let periodicDue = false;
   let hourlyDue = false;
 
   // Check daily: due if not run today
@@ -119,6 +128,10 @@ export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): Heartbea
   if (!state.lastWeekly || state.lastWeekly.slice(0, 10) < mondayStr) {
     weeklyDue = true;
   }
+  // Check periodic: due if not run within cooldown period (30 min)
+  if (!state.lastPeriodic || now.getTime() - new Date(state.lastPeriodic).getTime() >= PERIODIC_COOLDOWN_MS) {
+    periodicDue = true;
+  }
   // Check hourly: due if not run in the current hour
   // Compare YYYY-MM-DDTHH prefix to detect hour boundary
   const currentHourPrefix = now.toISOString().slice(0, 13); // "YYYY-MM-DDTHH"
@@ -129,6 +142,7 @@ export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): Heartbea
   for (const task of allTasks) {
     switch (task.section) {
       case 'periodic':
+        if (!periodicDue) break;
         // Skip periodic tasks whose assigned team is currently occupied
         if (task.assignee && config) {
           const team = Object.values(config.teams).find(t => t.name === task.assignee);
@@ -355,19 +369,16 @@ async function leaderHeartbeat(
     // Nothing to evaluate
     if (!inbox && unresolved.length === 0 && !improvementReport && !heartbeatReport) return;
 
-    // Dedup check — suppress if same dispatches + issues were already reported recently
-    // NOTE: Periodic tasks are excluded from fingerprint — they run every heartbeat by design
-    const nonPeriodicHeartbeatTasks = dueHeartbeatTasks.filter(t => t.section !== 'periodic');
+    // Dedup check — suppress if same dispatches + issues + heartbeat tasks were already reported recently
     const heartbeatFp = [
       ...unresolved.map(r => r.id).sort(),
       '||',
       ...highIssueKeys.sort(),
       '||',
-      ...(nonPeriodicHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
+      ...(dueHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
     ].join('|');
 
-    const hasPeriodicTasks = dueHeartbeatTasks.some(t => t.section === 'periodic');
-    if (!inbox && !hasPeriodicTasks && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
+    if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
       console.log('[heartbeat] Suppressed: identical context already reported within dedup window');
       return;
     }
@@ -405,16 +416,18 @@ async function leaderHeartbeat(
     lastHeartbeatFingerprint = heartbeatFp;
     lastHeartbeatInvokeAt = Date.now();
 
-    // Update heartbeat.md state tracking (mark daily/weekly/hourly as executed)
+    // Update heartbeat.md state tracking (mark daily/weekly/periodic/hourly as executed)
     if (dueHeartbeatTasks.length > 0) {
       const hasDaily = dueHeartbeatTasks.some(t => t.section === 'daily');
       const hasWeekly = dueHeartbeatTasks.some(t => t.section === 'weekly');
+      const hasPeriodic = dueHeartbeatTasks.some(t => t.section === 'periodic');
       const hasHourly = dueHeartbeatTasks.some(t => t.section === 'hourly');
-      if (hasDaily || hasWeekly || hasHourly) {
+      if (hasDaily || hasWeekly || hasPeriodic || hasHourly) {
         const state = readHeartbeatState(ws);
         const nowIso = new Date().toISOString();
         if (hasDaily) state.lastDaily = nowIso;
         if (hasWeekly) state.lastWeekly = nowIso;
+        if (hasPeriodic) state.lastPeriodic = nowIso;
         if (hasHourly) state.lastHourly = nowIso;
         writeHeartbeatState(ws, state);
       }
