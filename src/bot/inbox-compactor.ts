@@ -29,7 +29,7 @@ const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
 // ---------------------------------------------------------------------------
 
 export interface HeartbeatTask {
-  section: 'daily' | 'weekly' | 'periodic' | 'on-demand';
+  section: 'daily' | 'weekly' | 'hourly' | 'periodic' | 'on-demand';
   content: string;
   assignee: string | null;
 }
@@ -37,6 +37,7 @@ export interface HeartbeatTask {
 interface HeartbeatState {
   lastDaily: string | null;
   lastWeekly: string | null;
+  lastHourly: string | null;
 }
 
 export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
@@ -48,10 +49,10 @@ export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
   let currentSection: HeartbeatTask['section'] | null = null;
 
   for (const line of content.split('\n')) {
-    const sectionMatch = line.match(/^##\s+(Daily|Weekly|Periodic|On-demand)/i);
+    const sectionMatch = line.match(/^##\s+(Daily|Weekly|Hourly|Periodic|On-demand)/i);
     if (sectionMatch) {
       const s = sectionMatch[1].toLowerCase() as HeartbeatTask['section'];
-      if (['daily', 'weekly', 'periodic', 'on-demand'].includes(s)) {
+      if (['daily', 'weekly', 'hourly', 'periodic', 'on-demand'].includes(s)) {
         currentSection = s;
       }
       continue;
@@ -78,7 +79,7 @@ function readHeartbeatState(ws: string): HeartbeatState {
   try {
     return JSON.parse(fs.readFileSync(statePath, 'utf-8'));
   } catch {
-    return { lastDaily: null, lastWeekly: null };
+    return { lastDaily: null, lastWeekly: null, lastHourly: null };
   }
 }
 
@@ -103,6 +104,7 @@ export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): Heartbea
   const due: HeartbeatTask[] = [];
   let dailyDue = false;
   let weeklyDue = false;
+  let hourlyDue = false;
 
   // Check daily: due if not run today
   if (!state.lastDaily || !state.lastDaily.startsWith(todayStr)) {
@@ -116,6 +118,12 @@ export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): Heartbea
   const mondayStr = monday.toISOString().slice(0, 10);
   if (!state.lastWeekly || state.lastWeekly.slice(0, 10) < mondayStr) {
     weeklyDue = true;
+  }
+  // Check hourly: due if not run in the current hour
+  // Compare YYYY-MM-DDTHH prefix to detect hour boundary
+  const currentHourPrefix = now.toISOString().slice(0, 13); // "YYYY-MM-DDTHH"
+  if (!state.lastHourly || !state.lastHourly.startsWith(currentHourPrefix)) {
+    hourlyDue = true;
   }
 
   for (const task of allTasks) {
@@ -133,6 +141,7 @@ export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): Heartbea
         break;
       case 'daily': if (dailyDue) due.push(task); break;
       case 'weekly': if (weeklyDue) due.push(task); break;
+      case 'hourly': if (hourlyDue) due.push(task); break;
       // on-demand: excluded from automatic heartbeat — requires explicit trigger
     }
   }
@@ -396,15 +405,17 @@ async function leaderHeartbeat(
     lastHeartbeatFingerprint = heartbeatFp;
     lastHeartbeatInvokeAt = Date.now();
 
-    // Update heartbeat.md state tracking (mark daily/weekly as executed)
+    // Update heartbeat.md state tracking (mark daily/weekly/hourly as executed)
     if (dueHeartbeatTasks.length > 0) {
       const hasDaily = dueHeartbeatTasks.some(t => t.section === 'daily');
       const hasWeekly = dueHeartbeatTasks.some(t => t.section === 'weekly');
-      if (hasDaily || hasWeekly) {
+      const hasHourly = dueHeartbeatTasks.some(t => t.section === 'hourly');
+      if (hasDaily || hasWeekly || hasHourly) {
         const state = readHeartbeatState(ws);
         const nowIso = new Date().toISOString();
         if (hasDaily) state.lastDaily = nowIso;
         if (hasWeekly) state.lastWeekly = nowIso;
+        if (hasHourly) state.lastHourly = nowIso;
         writeHeartbeatState(ws, state);
       }
     }
