@@ -101,6 +101,47 @@ describe('parseHeartbeatMd', () => {
     expect(tasks[0].assignee).toBeNull();
   });
 
+  it('parses hourly tasks', () => {
+    fs.writeFileSync(path.join(tmpDir, 'heartbeat.md'), `
+## Hourly
+- [ ] 코드 분석 @체커코코
+- [ ] 이슈 관리 @대장코코
+`);
+
+    const tasks = parseHeartbeatMd(tmpDir);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toEqual({
+      section: 'hourly',
+      content: '코드 분석',
+      assignee: '체커코코',
+    });
+    expect(tasks[1]).toEqual({
+      section: 'hourly',
+      content: '이슈 관리',
+      assignee: '대장코코',
+    });
+  });
+
+  it('parses all section types together', () => {
+    fs.writeFileSync(path.join(tmpDir, 'heartbeat.md'), `
+## Daily
+- [ ] 일일 작업
+
+## Weekly
+- [ ] 주간 작업
+
+## Hourly
+- [ ] 시간별 작업
+
+## Periodic
+- [ ] 상시 작업
+`);
+
+    const tasks = parseHeartbeatMd(tmpDir);
+    expect(tasks).toHaveLength(4);
+    expect(tasks.map(t => t.section)).toEqual(['daily', 'weekly', 'hourly', 'periodic']);
+  });
+
   it('returns empty when file does not exist', () => {
     const tasks = parseHeartbeatMd(path.join(tmpDir, 'nonexistent'));
     expect(tasks).toEqual([]);
@@ -118,12 +159,12 @@ describe('getDueHeartbeatTasks — periodic occupied filter', () => {
     vi.mocked(isBusy).mockReturnValue(false);
     vi.mocked(isQueued).mockReturnValue(false);
 
-    // Write heartbeat state to avoid daily/weekly tasks triggering
+    // Write heartbeat state to avoid daily/weekly/hourly tasks triggering
     const mocoDir = path.join(tmpDir, '.mococo');
     fs.mkdirSync(mocoDir, { recursive: true });
     fs.writeFileSync(
       path.join(mocoDir, 'heartbeat-state.json'),
-      JSON.stringify({ lastDaily: new Date().toISOString(), lastWeekly: new Date().toISOString() }),
+      JSON.stringify({ lastDaily: new Date().toISOString(), lastWeekly: new Date().toISOString(), lastHourly: new Date().toISOString() }),
     );
   });
 
@@ -225,7 +266,7 @@ describe('getDueHeartbeatTasks — periodic cooldown', () => {
     vi.restoreAllMocks();
   });
 
-  function writeState(dir: string, state: { lastDaily?: string; lastWeekly?: string; lastPeriodic?: string | null }) {
+  function writeState(dir: string, state: { lastDaily?: string; lastWeekly?: string; lastPeriodic?: string | null; lastHourly?: string | null }) {
     const mocoDir = path.join(dir, '.mococo');
     fs.mkdirSync(mocoDir, { recursive: true });
     fs.writeFileSync(
@@ -234,6 +275,7 @@ describe('getDueHeartbeatTasks — periodic cooldown', () => {
         lastDaily: state.lastDaily ?? new Date().toISOString(),
         lastWeekly: state.lastWeekly ?? new Date().toISOString(),
         lastPeriodic: state.lastPeriodic ?? null,
+        lastHourly: state.lastHourly ?? null,
       }),
     );
   }
@@ -310,5 +352,103 @@ describe('getDueHeartbeatTasks — periodic cooldown', () => {
     const periodicTasks = tasks.filter(t => t.section === 'periodic');
     // Should treat missing lastPeriodic as null → periodic is due
     expect(periodicTasks).toHaveLength(2);
+  });
+});
+
+describe('getDueHeartbeatTasks — hourly scheduling', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'heartbeat-hourly-'));
+    vi.mocked(isBusy).mockReturnValue(false);
+    vi.mocked(isQueued).mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  function writeState(dir: string, state: { lastDaily?: string; lastWeekly?: string; lastPeriodic?: string | null; lastHourly?: string | null }) {
+    const mocoDir = path.join(dir, '.mococo');
+    fs.mkdirSync(mocoDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mocoDir, 'heartbeat-state.json'),
+      JSON.stringify({
+        lastDaily: state.lastDaily ?? new Date().toISOString(),
+        lastWeekly: state.lastWeekly ?? new Date().toISOString(),
+        lastPeriodic: state.lastPeriodic ?? null,
+        lastHourly: state.lastHourly ?? null,
+      }),
+    );
+  }
+
+  function writeHourlyHeartbeat(dir: string) {
+    fs.writeFileSync(path.join(dir, 'heartbeat.md'), `
+## Hourly
+- [ ] 코드 분석 @체커코코
+- [ ] 이슈 관리 @대장코코
+`);
+  }
+
+  it('includes hourly tasks when lastHourly is null (never run)', () => {
+    writeHourlyHeartbeat(tmpDir);
+    writeState(tmpDir, { lastHourly: null });
+
+    const tasks = getDueHeartbeatTasks(tmpDir);
+    const hourlyTasks = tasks.filter(t => t.section === 'hourly');
+    expect(hourlyTasks).toHaveLength(2);
+  });
+
+  it('includes hourly tasks when last run was in a previous hour', () => {
+    writeHourlyHeartbeat(tmpDir);
+    // Set lastHourly to 2 hours ago
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    writeState(tmpDir, { lastHourly: twoHoursAgo });
+
+    const tasks = getDueHeartbeatTasks(tmpDir);
+    const hourlyTasks = tasks.filter(t => t.section === 'hourly');
+    expect(hourlyTasks).toHaveLength(2);
+  });
+
+  it('excludes hourly tasks when already run this hour', () => {
+    writeHourlyHeartbeat(tmpDir);
+    // Set lastHourly to current time (same hour)
+    writeState(tmpDir, { lastHourly: new Date().toISOString() });
+
+    const tasks = getDueHeartbeatTasks(tmpDir);
+    const hourlyTasks = tasks.filter(t => t.section === 'hourly');
+    expect(hourlyTasks).toHaveLength(0);
+  });
+
+  it('includes hourly tasks at hour boundary', () => {
+    writeHourlyHeartbeat(tmpDir);
+    // Set lastHourly to 59 minutes ago — if that crosses the hour boundary, it should be due
+    const now = new Date();
+    const lastHour = new Date(now);
+    lastHour.setHours(lastHour.getHours() - 1);
+    writeState(tmpDir, { lastHourly: lastHour.toISOString() });
+
+    const tasks = getDueHeartbeatTasks(tmpDir);
+    const hourlyTasks = tasks.filter(t => t.section === 'hourly');
+    expect(hourlyTasks).toHaveLength(2);
+  });
+
+  it('handles mixed sections with hourly correctly', () => {
+    fs.writeFileSync(path.join(tmpDir, 'heartbeat.md'), `
+## Periodic
+- [ ] 상시 모니터링
+
+## Hourly
+- [ ] 시간별 작업
+
+## Daily
+- [ ] 일일 작업
+`);
+    // daily+hourly not run, weekly already run
+    writeState(tmpDir, { lastHourly: null, lastDaily: '2020-01-01T00:00:00Z', lastWeekly: new Date().toISOString() });
+
+    const tasks = getDueHeartbeatTasks(tmpDir);
+    expect(tasks.map(t => t.section).sort()).toEqual(['daily', 'hourly', 'periodic']);
   });
 });
