@@ -253,7 +253,7 @@ ${heartbeatReport || '(none)'}
 - Unresolved dispatches (5min+) → INVOKE
 - High severity improvement issues → INVOKE (include issue details in reason)
 - Medium/low only improvement issues → NO (다음 정기 리뷰에서 처리)
-- Heartbeat tasks (periodic/daily/weekly) → INVOKE (include task summary in reason)
+- Heartbeat tasks (periodic/daily/weekly/hourly) → INVOKE (include task summary in reason)
 - Empty inbox + no unresolved + no high issues + no heartbeat tasks → NO
 
 Output ONE line:
@@ -415,6 +415,22 @@ async function leaderHeartbeat(
     // Update heartbeat dedup state
     lastHeartbeatFingerprint = heartbeatFp;
     lastHeartbeatInvokeAt = Date.now();
+
+    // Clear improvement.json after consuming — prevent same issues from re-triggering
+    // The leader already received the report in the triage prompt.
+    // The improvement-scanner will write fresh issues on its next scan cycle.
+    if (improvementReport) {
+      try {
+        const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
+        const raw = fs.readFileSync(improvementPath, 'utf-8');
+        const data = JSON.parse(raw);
+        data.issues = [];
+        atomicWriteSync(improvementPath, JSON.stringify(data, null, 2));
+        console.log('[heartbeat] Cleared improvement.json issues after leader invoke');
+      } catch {
+        // File may not exist or be malformed — ignore
+      }
+    }
 
     // Update heartbeat.md state tracking (mark daily/weekly/periodic/hourly as executed)
     if (dueHeartbeatTasks.length > 0) {
