@@ -297,11 +297,11 @@ describe('getDueHeartbeatTasks — periodic cooldown', () => {
     expect(periodicTasks).toHaveLength(2);
   });
 
-  it('excludes periodic tasks when within cooldown period (30min)', () => {
+  it('excludes periodic tasks when within cooldown period (3min)', () => {
     writePeriodicHeartbeat(tmpDir);
-    // Set lastPeriodic to 5 minutes ago — within 30min cooldown
-    const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
-    writeState(tmpDir, { lastPeriodic: fiveMinAgo });
+    // Set lastPeriodic to 1 minute ago — within 3min cooldown
+    const oneMinAgo = new Date(Date.now() - 1 * 60_000).toISOString();
+    writeState(tmpDir, { lastPeriodic: oneMinAgo });
 
     const tasks = getDueHeartbeatTasks(tmpDir);
     const periodicTasks = tasks.filter(t => t.section === 'periodic');
@@ -310,9 +310,9 @@ describe('getDueHeartbeatTasks — periodic cooldown', () => {
 
   it('includes periodic tasks when cooldown expired', () => {
     writePeriodicHeartbeat(tmpDir);
-    // Set lastPeriodic to 31 minutes ago — cooldown expired
-    const thirtyOneMinAgo = new Date(Date.now() - 31 * 60_000).toISOString();
-    writeState(tmpDir, { lastPeriodic: thirtyOneMinAgo });
+    // Set lastPeriodic to 4 minutes ago — cooldown expired (3min cooldown)
+    const fourMinAgo = new Date(Date.now() - 4 * 60_000).toISOString();
+    writeState(tmpDir, { lastPeriodic: fourMinAgo });
 
     const tasks = getDueHeartbeatTasks(tmpDir);
     const periodicTasks = tasks.filter(t => t.section === 'periodic');

@@ -23,7 +23,7 @@ const HEARTBEAT_MS = 3 * 60_000;        // 3 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
 const PENDING_TASK_COOLDOWN_MS = 2 * 60 * 60_000; // 2 hours cooldown per team
-const PERIODIC_COOLDOWN_MS = 30 * 60_000;          // 30 minutes — periodic tasks cooldown
+const PERIODIC_COOLDOWN_MS = 3 * 60_000;            // 3 minutes — match heartbeat.md spec
 
 // ---------------------------------------------------------------------------
 // Heartbeat.md — scheduled tasks from file
@@ -383,17 +383,36 @@ async function leaderHeartbeat(
       return;
     }
 
-    // Haiku triage
+    // Haiku triage — with fallback for heartbeat tasks
     const triagePrompt = buildTriagePrompt(inbox, unresolved.length, improvementReport, heartbeatReport);
-    const triageResult = await runHaiku(triagePrompt);
+    let reason: string;
+    try {
+      const triageResult = await runHaiku(triagePrompt);
 
-    if (triageResult.startsWith('NO')) {
-      console.log('[heartbeat] Haiku triage: no leader intervention needed');
-      return;
+      if (triageResult.startsWith('NO')) {
+        // Fallback: if heartbeat tasks are due, force invoke even if Haiku says NO
+        if (dueHeartbeatTasks.length > 0) {
+          console.log(`[heartbeat] Haiku said NO but ${dueHeartbeatTasks.length} heartbeat task(s) due — forcing invoke`);
+          reason = `정기 작업 ${dueHeartbeatTasks.length}건 실행 예정`;
+        } else {
+          console.log('[heartbeat] Haiku triage: no leader intervention needed');
+          return;
+        }
+      } else {
+        reason = triageResult.replace(/^INVOKE:\s*/, '').trim() || 'inbox 확인 필요';
+      }
+    } catch (triageErr) {
+      // Haiku failure fallback: if heartbeat tasks or inbox exist, invoke anyway
+      if (dueHeartbeatTasks.length > 0 || inbox) {
+        console.warn(`[heartbeat] Haiku triage failed, falling back to direct invoke: ${triageErr}`);
+        reason = dueHeartbeatTasks.length > 0
+          ? `정기 작업 ${dueHeartbeatTasks.length}건 실행 예정 (triage 실패 fallback)`
+          : 'inbox 확인 필요 (triage 실패 fallback)';
+      } else {
+        console.warn(`[heartbeat] Haiku triage failed, nothing actionable to invoke for: ${triageErr}`);
+        return;
+      }
     }
-
-    // Extract reason from "INVOKE: reason"
-    const reason = triageResult.replace(/^INVOKE:\s*/, '').trim() || 'inbox 확인 필요';
 
     console.log(`[heartbeat] Invoking leader: ${reason}`);
 
@@ -478,8 +497,8 @@ async function followUpLoop(
     // Still working → wait
     if (isBusy(team.id)) continue;
 
-    // Just finished → give it a moment
-    if (elapsedMin < 5) continue;
+    // Just finished → give it a moment (10 min grace period)
+    if (elapsedMin < 10) continue;
 
     // Already queued → don't pile on
     if (isQueued(team.id)) continue;
@@ -496,11 +515,11 @@ async function followUpLoop(
       continue;
     }
 
-    if (elapsedMin < 15) {
+    if (elapsedMin < 30) {
       // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
       if (isOccupied(team.id)) continue;
 
-      // 5-15 min: nudge the team to report
+      // 10-30 min: nudge the team to report
       console.log(`[follow-up] Nudging ${team.name} to report (${Math.round(elapsedMin)}min since dispatch, nudge ${currentNudges + 1}/${MAX_NUDGES_PER_RECORD})`);
       const nudgeMsg: ConversationMessage = {
         teamId: 'system',
@@ -519,32 +538,11 @@ async function followUpLoop(
       setFollowUpCooldown(team.id);
       break; // One nudge per cycle
     } else {
-      // 15min+: notify leader ONCE, then auto-resolve to prevent infinite loop
-      const leader = Object.values(config.teams).find(t => t.isLeader);
-      // triggerInvocation 직전 최종 상태 체크 (race condition 방지)
-      if (leader && !isOccupied(leader.id)) {
-        console.log(`[follow-up] Alerting leader: ${team.name} unreported for ${Math.round(elapsedMin)}min (auto-resolving after alert)`);
-        const alertMsg: ConversationMessage = {
-          teamId: 'system',
-          teamName: 'System',
-          content: `[미보고 알림] ${team.name}가 ${Math.round(elapsedMin)}분째 보고하지 않음. 작업: ${record.reason}`,
-          timestamp: new Date(),
-          mentions: [leader.id],
-        };
-        const alertChannelId = env.workChannelId || env.memberTrackingChannelId;
-        if (alertChannelId) {
-          addMessage(alertChannelId, alertMsg);
-          if (isOccupied(leader.id)) {
-            console.log(`[follow-up] Leader became occupied during alert, skipping invocation`);
-          } else {
-            triggerInvocation(leader, alertMsg, alertChannelId, config, env, newChain());
-          }
-        }
-      }
-      // Auto-resolve after leader alert to prevent repeated notifications
+      // 30min+: auto-resolve silently — no leader alert to prevent false alarms
+      // The leader will see unresolved dispatches in the next heartbeat triage if needed
       ledger.resolveById(record.id);
       nudgeCounts.delete(record.id);
-      console.log(`[follow-up] Auto-resolved record for ${team.name} after leader alert (${Math.round(elapsedMin)}min elapsed)`);
+      console.log(`[follow-up] Auto-resolved record for ${team.name} after ${Math.round(elapsedMin)}min (silent — no leader alert)`);
     }
   }
 }
