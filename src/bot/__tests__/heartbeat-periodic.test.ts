@@ -19,7 +19,7 @@ vi.mock('../../teams/dispatch-ledger.js', () => ({
 vi.mock('../../teams/context.js', () => ({ addMessage: vi.fn() }));
 vi.mock('../client.js', () => ({ newChain: vi.fn() }));
 
-import { parseHeartbeatMd, getDueHeartbeatTasks } from '../inbox-compactor.js';
+import { parseHeartbeatMd, getDueHeartbeatTasks, shouldSuppressHeartbeat } from '../inbox-compactor.js';
 import { isBusy, isQueued } from '../../teams/concurrency.js';
 
 function makeTeamConfig(overrides: Partial<TeamConfig> & { id: string; name: string }): TeamConfig {
@@ -450,5 +450,43 @@ describe('getDueHeartbeatTasks — hourly scheduling', () => {
 
     const tasks = getDueHeartbeatTasks(tmpDir);
     expect(tasks.map(t => t.section).sort()).toEqual(['daily', 'hourly', 'periodic']);
+  });
+});
+
+describe('shouldSuppressHeartbeat — dedup bypass for scheduled tasks', () => {
+  const DEDUP_WINDOW = 60 * 60_000; // 1 hour
+  const fp = 'task1|task2||issue1||periodic:check';
+
+  it('suppresses when no inbox, no due tasks, same fingerprint, within window', () => {
+    expect(shouldSuppressHeartbeat(false, 0, fp, fp, DEDUP_WINDOW - 1000)).toBe(true);
+  });
+
+  it('does NOT suppress when dueHeartbeatTasks exist (dedup bypass)', () => {
+    // Core fix: scheduled tasks must execute even if fingerprint matches within window
+    expect(shouldSuppressHeartbeat(false, 1, fp, fp, DEDUP_WINDOW - 1000)).toBe(false);
+  });
+
+  it('does NOT suppress when dueHeartbeatTasks exist (multiple tasks)', () => {
+    expect(shouldSuppressHeartbeat(false, 3, fp, fp, 1000)).toBe(false);
+  });
+
+  it('does NOT suppress when inbox has content', () => {
+    expect(shouldSuppressHeartbeat(true, 0, fp, fp, DEDUP_WINDOW - 1000)).toBe(false);
+  });
+
+  it('does NOT suppress when fingerprint differs', () => {
+    expect(shouldSuppressHeartbeat(false, 0, fp, 'different-fp', DEDUP_WINDOW - 1000)).toBe(false);
+  });
+
+  it('does NOT suppress when lastFingerprint is null (first run)', () => {
+    expect(shouldSuppressHeartbeat(false, 0, fp, null, 0)).toBe(false);
+  });
+
+  it('does NOT suppress when dedup window has elapsed', () => {
+    expect(shouldSuppressHeartbeat(false, 0, fp, fp, DEDUP_WINDOW + 1000)).toBe(false);
+  });
+
+  it('does NOT suppress when both inbox and due tasks exist', () => {
+    expect(shouldSuppressHeartbeat(true, 2, fp, fp, 1000)).toBe(false);
   });
 });

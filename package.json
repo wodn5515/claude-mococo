@@ -1,6 +1,6 @@
 {
   "name": "claude-mococo",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "AI Team Company on Discord — multi-engine AI agents as distinct team identities",
   "type": "module",
   "license": "MIT",

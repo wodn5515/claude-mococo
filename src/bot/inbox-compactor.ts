@@ -203,6 +203,23 @@ const HEARTBEAT_DEDUP_WINDOW_MS = 60 * 60_000; // 1 hour suppression window
 let lastHeartbeatFingerprint: string | null = null;
 let lastHeartbeatInvokeAt = 0;
 
+/**
+ * Determine whether a heartbeat invocation should be suppressed (deduped).
+ * Scheduled heartbeat tasks (periodic/daily/weekly/hourly) bypass dedup —
+ * they must execute every cycle regardless of fingerprint match.
+ */
+export function shouldSuppressHeartbeat(
+  hasInbox: boolean,
+  dueTaskCount: number,
+  currentFp: string,
+  lastFp: string | null,
+  msSinceLastInvoke: number,
+): boolean {
+  if (hasInbox) return false;
+  if (dueTaskCount > 0) return false;
+  return currentFp === lastFp && msSinceLastInvoke < HEARTBEAT_DEDUP_WINDOW_MS;
+}
+
 function isFollowUpOnCooldown(teamId: string): boolean {
   const lastNudge = followUpCooldowns.get(teamId);
   if (!lastNudge) return false;
@@ -378,7 +395,7 @@ async function leaderHeartbeat(
       ...(dueHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
     ].join('|');
 
-    if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
+    if (shouldSuppressHeartbeat(!!inbox, dueHeartbeatTasks.length, heartbeatFp, lastHeartbeatFingerprint, Date.now() - lastHeartbeatInvokeAt)) {
       console.log('[heartbeat] Suppressed: identical context already reported within dedup window');
       return;
     }
