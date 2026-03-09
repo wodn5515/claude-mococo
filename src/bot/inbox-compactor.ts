@@ -378,7 +378,9 @@ async function leaderHeartbeat(
       ...(dueHeartbeatTasks.map(t => `${t.section}:${t.content}`).sort()),
     ].join('|');
 
-    if (!inbox && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
+    // Scheduled heartbeat tasks (periodic/daily/weekly/hourly) should never be deduped —
+    // they are explicitly scheduled to run at their intervals and must execute every cycle.
+    if (!inbox && dueHeartbeatTasks.length === 0 && heartbeatFp === lastHeartbeatFingerprint && Date.now() - lastHeartbeatInvokeAt < HEARTBEAT_DEDUP_WINDOW_MS) {
       console.log('[heartbeat] Suppressed: identical context already reported within dedup window');
       return;
     }
