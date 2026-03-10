@@ -38,31 +38,56 @@ export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsCon
       console.warn(`[config] Missing env var ${discordTokenEnv} for team "${id}" — bot will not start`);
     }
 
-    // Resolve MCP server configs: expand $VAR references in env values
+    // Resolve MCP server configs: expand $VAR references in env/header values
     let mcpServers: Record<string, McpServerConfig> | undefined;
     if (cfg.mcpServers) {
       mcpServers = {};
       for (const [name, server] of Object.entries(cfg.mcpServers as Record<string, any>)) {
-        const resolvedEnv: Record<string, string> = {};
-        if (server.env) {
-          for (const [key, val] of Object.entries(server.env as Record<string, string>)) {
-            if (val.startsWith('$')) {
-              const envName = val.slice(1);
-              const envValue = process.env[envName];
-              if (envValue === undefined) {
-                console.warn(`[config] MCP server "${name}" for team "${id}": env var ${envName} is not set (key: ${key})`);
+        if (server.type === 'http') {
+          // HTTP MCP server — resolve $VAR in headers
+          const resolvedHeaders: Record<string, string> = {};
+          if (server.headers) {
+            for (const [key, val] of Object.entries(server.headers as Record<string, string>)) {
+              if (val.startsWith('$')) {
+                const envName = val.slice(1);
+                const envValue = process.env[envName];
+                if (envValue === undefined) {
+                  console.warn(`[config] MCP server "${name}" for team "${id}": env var ${envName} is not set (header: ${key})`);
+                }
+                resolvedHeaders[key] = envValue ?? '';
+              } else {
+                resolvedHeaders[key] = val;
               }
-              resolvedEnv[key] = envValue ?? '';
-            } else {
-              resolvedEnv[key] = val;
             }
           }
+          mcpServers[name] = {
+            type: 'http',
+            url: server.url,
+            headers: Object.keys(resolvedHeaders).length > 0 ? resolvedHeaders : undefined,
+          };
+        } else {
+          // stdio MCP server — resolve $VAR in env
+          const resolvedEnv: Record<string, string> = {};
+          if (server.env) {
+            for (const [key, val] of Object.entries(server.env as Record<string, string>)) {
+              if (val.startsWith('$')) {
+                const envName = val.slice(1);
+                const envValue = process.env[envName];
+                if (envValue === undefined) {
+                  console.warn(`[config] MCP server "${name}" for team "${id}": env var ${envName} is not set (key: ${key})`);
+                }
+                resolvedEnv[key] = envValue ?? '';
+              } else {
+                resolvedEnv[key] = val;
+              }
+            }
+          }
+          mcpServers[name] = {
+            command: server.command,
+            args: server.args,
+            env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
+          };
         }
-        mcpServers[name] = {
-          command: server.command,
-          args: server.args,
-          env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
-        };
       }
     }
 
