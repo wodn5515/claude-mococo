@@ -2,11 +2,20 @@ export type TeamId = string;
 
 export type Engine = 'claude' | 'codex' | 'gemini';
 
-export interface McpServerConfig {
+export interface McpServerStdioConfig {
+  type?: 'stdio';
   command: string;
   args?: string[];
   env?: Record<string, string>;
 }
+
+export interface McpServerHttpConfig {
+  type: 'http';
+  url: string;
+  headers?: Record<string, string>;
+}
+
+export type McpServerConfig = McpServerStdioConfig | McpServerHttpConfig;
 
 export interface GitIdentity {
   name: string;
