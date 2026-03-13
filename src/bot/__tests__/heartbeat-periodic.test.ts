@@ -18,6 +18,11 @@ vi.mock('../../teams/dispatch-ledger.js', () => ({
 }));
 vi.mock('../../teams/context.js', () => ({ addMessage: vi.fn() }));
 vi.mock('../client.js', () => ({ newChain: vi.fn() }));
+vi.mock('../heartbeat-tasks.js', () => ({ toHeartbeatTasks: vi.fn(() => []) }));
+vi.mock('../stress-tracker.js', () => ({ decayAll: vi.fn() }));
+
+// Force md-based parsing for these tests (testing the md parser, not the TaskRegistry)
+process.env.HEARTBEAT_SOURCE = 'md';
 
 import { parseHeartbeatMd, getDueHeartbeatTasks, shouldSuppressHeartbeat } from '../inbox-compactor.js';
 import { isBusy, isQueued } from '../../teams/concurrency.js';

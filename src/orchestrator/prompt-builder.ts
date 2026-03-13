@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { formatConversation } from '../teams/context.js';
 import { loadRecentEpisodes } from '../bot/episode-writer.js';
+import { getStressModifier } from '../bot/stress-tracker.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
 const MAX_INBOX_ENTRIES = 20;
@@ -462,9 +463,12 @@ You have agent team capabilities enabled. For complex tasks that involve multipl
 ${team.teamRules?.length ? `\n### Team Rules\n${team.teamRules.map(r => `- ${r}`).join('\n')}` : ''}`
     : '';
 
-  // 9. Assemble final prompt
+  // 9. Build stress modifier (Current Mood)
+  const stressMood = getStressModifier(ws, team.id, team.stressProfile);
+
+  // 10. Assemble final prompt
   return `${template}
-${sharedRules ? `\n${sharedRules}\n` : ''}${newAgentProtocol ? `\n${newAgentProtocol}\n` : ''}
+${stressMood ? `\n${stressMood}\n` : ''}${sharedRules ? `\n${sharedRules}\n` : ''}${newAgentProtocol ? `\n${newAgentProtocol}\n` : ''}
 ## Current Context
 Current channel: ${chId}
 Current time: ${currentTime}

@@ -6,6 +6,8 @@ import { isBusy, isQueued } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { addMessage } from '../teams/context.js';
 import { newChain } from './client.js';
+import { toHeartbeatTasks } from './heartbeat-tasks.js';
+import { decayAll } from './stress-tracker.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 /** Check if a team is currently busy or queued (not available for new work). */
@@ -101,7 +103,9 @@ function writeHeartbeatState(ws: string, state: HeartbeatState): void {
 }
 
 export function getDueHeartbeatTasks(ws: string, config?: TeamsConfig): HeartbeatTask[] {
-  const allTasks = parseHeartbeatMd(ws);
+  // Use TaskRegistry (code-defined tasks) with fallback to heartbeat.md
+  const useRegistry = process.env.HEARTBEAT_SOURCE !== 'md';
+  const allTasks = useRegistry ? toHeartbeatTasks() : parseHeartbeatMd(ws);
   if (allTasks.length === 0) return [];
 
   const state = readHeartbeatState(ws);
@@ -290,9 +294,12 @@ async function leaderHeartbeat(
   try {
     const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
     if (!leaderTeam) return;
-    if (isOccupied(leaderTeam.id)) return;
 
+    // Stress decay — runs every heartbeat cycle regardless of leader availability
     const ws = config.workspacePath;
+    decayAll(ws, Object.keys(config.teams));
+
+    if (isOccupied(leaderTeam.id)) return;
     const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
 
     // Gather context

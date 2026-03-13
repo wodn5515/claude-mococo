@@ -1,5 +1,6 @@
 import { createEngine } from '../orchestrator/engines.js';
 import { buildTeamPrompt } from '../orchestrator/prompt-builder.js';
+import { updateStress } from '../bot/stress-tracker.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
 const INVOKE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — safety net above engine-level timeout
@@ -92,7 +93,17 @@ export async function invokeTeam(
   });
 
   try {
-    return await Promise.race([enginePromise, timeoutPromise]);
+    const result = await Promise.race([enginePromise, timeoutPromise]);
+
+    // Update stress based on outcome
+    const sensitivity = team.stressProfile?.sensitivity ?? 1.0;
+    if (result.timedOut) {
+      updateStress(config.workspacePath, team.id, 'task_failed', sensitivity);
+    } else {
+      updateStress(config.workspacePath, team.id, 'task_complete', sensitivity);
+    }
+
+    return result;
   } finally {
     clearTimeout(timeoutId!);
     cleanupListeners();
