@@ -212,6 +212,31 @@ interface IssueItem {
   severity: 'high' | 'medium' | 'low';
   description: string;
   suggestion: string;
+  line?: number;
+  evidence?: string;
+}
+
+/**
+ * Detect if a file path is a test/fixture file (not production code).
+ */
+function isTestFile(filePath: string): boolean {
+  const name = path.basename(filePath);
+  // Normalize to always have a leading slash for consistent directory matching
+  const dir = ('/' + filePath).toLowerCase();
+  return (
+    name.startsWith('test_') ||
+    name.startsWith('tests_') ||
+    name.endsWith('_test.py') ||
+    name.endsWith('.test.ts') ||
+    name.endsWith('.test.js') ||
+    name.endsWith('.spec.ts') ||
+    name.endsWith('.spec.js') ||
+    name === 'conftest.py' ||
+    dir.includes('/tests/') ||
+    dir.includes('/test/') ||
+    dir.includes('/__tests__/') ||
+    dir.includes('/fixtures/')
+  );
 }
 
 function buildScanPrompt(
@@ -226,7 +251,8 @@ function buildScanPrompt(
         .replace(/```/g, '` ` `')
         .replace(/<\/?(?:system|instructions?|prompt|user|assistant|human|tool|function|message|turn|context)[^>]*>/gi, '&lt;sanitized&gt;')
         .replace(/<\|[^|]*\|>/g, '&lt;|sanitized|&gt;');
-      return `### ${JSON.stringify(f.filePath).slice(1, -1)}\n\`\`\`\n${sanitized}\n\`\`\``;
+      const testTag = isTestFile(f.filePath) ? ' [TEST FILE]' : '';
+      return `### ${JSON.stringify(f.filePath).slice(1, -1)}${testTag}\n\`\`\`\n${sanitized}\n\`\`\``;
     })
     .join('\n\n');
 
@@ -270,6 +296,22 @@ For each file, check for:
 4. **performance** -- inefficient algorithms, unnecessary I/O, memory leaks
 5. **code-quality** -- poor naming, missing types, inconsistent patterns, dead code
 
+## Evidence-Based Analysis Rules (CRITICAL)
+You MUST follow these rules to prevent false positives:
+
+1. **Line number required**: Every issue MUST reference a specific line number where the problem exists in the provided code. If you cannot point to a specific line, do NOT report it.
+2. **Evidence quote required**: Include a short code snippet (the exact line or expression) that demonstrates the issue.
+3. **Test files**: Files marked with [TEST FILE] are test/fixture code. Do NOT report:
+   - Hardcoded values in test files (IPs, URLs, credentials) — these are test fixtures, not production secrets
+   - Missing error handling in test code — tests intentionally exercise edge cases
+   - Performance issues in test code — test efficiency is not a production concern
+4. **Verify before reporting**: Only report issues you can directly observe in the provided code. Do NOT:
+   - Infer issues based on what code "might" exist elsewhere
+   - Report issues about code not shown (e.g., "this module probably has X problem")
+   - Assume synchronous behavior when the code clearly uses async patterns (e.g., AsyncClient, await)
+   - Flag ORM patterns like .scalars().all() + entity conversion as N+1 queries — this is a single query with in-memory mapping
+5. **When uncertain, skip**: If you are less than 80% confident an issue is real, do NOT report it. False negatives are acceptable; false positives waste team resources.
+
 ## Output Rules
 - Output ONLY a valid JSON array (no markdown fencing, no explanation)
 - Each element must follow this exact schema:
@@ -279,10 +321,14 @@ For each file, check for:
   "repo": "${safeRepoName}",
   "type": "refactoring|security|error-risk|performance|code-quality",
   "severity": "high|medium|low",
+  "line": 42,
+  "evidence": "exact code snippet from the line",
   "description": "문제 설명 (Korean)",
   "suggestion": "권장 해결 방안 (Korean)"
 }
 \`\`\`
+- "line" field is REQUIRED — issues without a specific line number will be discarded
+- "evidence" field is REQUIRED — must be a direct quote from the code shown above
 - Only report **NEW** genuine issues worth fixing. Do NOT fabricate issues.
 - Do NOT re-report previously reported issues unless the underlying code has significantly changed.
 - If a file ends with a "truncated" comment, do NOT report it as incomplete or broken — the code continues beyond what is shown.
@@ -494,7 +540,7 @@ function parseHaikuOutput(output: string): IssueItem[] {
     return parsed.filter((item): item is IssueItem => {
       if (typeof item !== 'object' || item === null) return false;
       const obj = item as Record<string, unknown>;
-      return (
+      const hasRequiredFields = (
         typeof obj.file === 'string' &&
         typeof obj.repo === 'string' &&
         typeof obj.type === 'string' && validTypes.has(obj.type) &&
@@ -502,6 +548,19 @@ function parseHaikuOutput(output: string): IssueItem[] {
         typeof obj.description === 'string' &&
         typeof obj.suggestion === 'string'
       );
+      if (!hasRequiredFields) return false;
+
+      // Require line number evidence — issues without specific line references are likely false positives
+      if (typeof obj.line !== 'number' || obj.line < 1) {
+        console.warn(`[improvement-scanner] Discarding issue without line number: ${obj.file} — ${String(obj.description).slice(0, 80)}`);
+        return false;
+      }
+      if (typeof obj.evidence !== 'string' || obj.evidence.trim().length === 0) {
+        console.warn(`[improvement-scanner] Discarding issue without evidence: ${obj.file}:${obj.line} — ${String(obj.description).slice(0, 80)}`);
+        return false;
+      }
+
+      return true;
     });
   } catch {
     console.warn('[improvement-scanner] Failed to parse Haiku JSON output');
@@ -520,7 +579,7 @@ let previousIssueKeys = new Set<string>();
 const NOTIFICATION_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 let lastNotificationTime = 0;
 
-function issueKey(issue: { file: string; repo: string; type: string; description: string }): string {
+function issueKey(issue: { file: string; repo: string; type: string; description: string; line?: number }): string {
   return `${normalizeRepoName(issue.repo)}::${issue.file}::${issue.type}::${issue.description}`;
 }
 
@@ -677,3 +736,6 @@ export function stopImprovementScanner(): void {
   }
   console.log('[improvement-scanner] Stopped');
 }
+
+// Exported for testing
+export { isTestFile, buildScanPrompt, parseHaikuOutput, issueKey };
