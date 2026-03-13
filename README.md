@@ -136,8 +136,8 @@ Controlled per-agent in `teams.json`. The permission value is matched against th
 Typical tiers:
 - **Leader:** Read-only — deny `git push`, `gh pr`, file edits
 - **Backend / Frontend:** Edit files, commit locally — deny `git push`, `gh pr merge`
-- **Reviewer:** Push and open PRs — deny `gh pr merge`
-- **All agents:** `gh pr merge` and `git push --force main/master` denied globally
+- **Reviewer:** Push and open PRs — can merge Kil-biseo and claude-mococo repos after PASS
+- **All agents:** `git push --force main/master` denied globally. `gh pr merge` denied except for Reviewer on Kil-biseo and claude-mococo repos
 
 ### Engines
 
