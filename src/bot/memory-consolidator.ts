@@ -75,16 +75,11 @@ const teamLocks = new Map<string, Promise<void>>();
 
 function withTeamLock(teamId: string, fn: () => Promise<void>): Promise<void> {
   const prev = teamLocks.get(teamId) ?? Promise.resolve();
-  const next = prev.then(fn, fn); // run fn after previous completes (even if it rejected)
+  // Chain fn after previous — runs regardless of whether prev resolved or rejected.
+  // Never delete from map: entries are bounded by team count, and keeping the
+  // resolved promise ensures new callers always chain correctly (fixes #51).
+  const next = prev.then(fn, fn);
   teamLocks.set(teamId, next);
-  // Cleanup: only delete from map if no newer call has replaced our promise.
-  // This prevents a race condition where a new caller's prev reference is lost
-  // when an earlier caller's finally block deletes the entry.
-  void next.finally(() => {
-    if (teamLocks.get(teamId) === next) {
-      teamLocks.delete(teamId);
-    }
-  });
   return next;
 }
 
@@ -262,17 +257,23 @@ export function checkSizeBasedConsolidation(teamId: string, teamName: string, co
 // Periodic check — 6-hour interval
 // ---------------------------------------------------------------------------
 
-function checkMemories(config: TeamsConfig): void {
+async function checkMemories(config: TeamsConfig): Promise<void> {
   for (const team of Object.values(config.teams)) {
     if (isBusy(team.id)) continue;
 
-    consolidateTeam(team.id, team.name, config).catch(err => {
+    // Await consolidateTeam before compactEpisodes to ensure sequential file access
+    // per team (fixes #54 — both operate on episodes.jsonl via withTeamLock)
+    try {
+      await consolidateTeam(team.id, team.name, config);
+    } catch (err) {
       console.error(`[memory-consolidator] Error consolidating ${team.name}: ${err}`);
-    });
+    }
 
-    compactEpisodes(team.id, team.name, config).catch(err => {
+    try {
+      await compactEpisodes(team.id, team.name, config);
+    } catch (err) {
       console.error(`[memory-consolidator] Error compacting episodes for ${team.name}: ${err}`);
-    });
+    }
   }
 }
 
