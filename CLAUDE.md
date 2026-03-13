@@ -37,6 +37,16 @@ Types: `feat.`, `fix.`, `refactor.`, `style.`, `docs.`, `chore.`, `test.`
 - Check out the correct branch before making changes
 - Commit each logical unit separately
 
+## AGENT.md System
+
+Each repository can have an `AGENT.md` file at its root (`repos/<name>/AGENT.md`). When an agent's message mentions a repo, the prompt-builder auto-detects the repo and injects the AGENT.md contents into the system prompt.
+
+**Detection:** Explicit `repos/<name>` path takes priority, then known repo name mentioned in message text.
+
+**Fallback:** If no `AGENT.md` exists, `prompts/repo-specific/<name>.md` is used (legacy).
+
+**Template:** `defaults/AGENT.md` contains the standard sections (Overview, Tech Stack, Architecture, Branch Strategy, Key Commands, Conventions, Known Constraints).
+
 ## Heartbeat Scheduled Tasks
 
 The leader's heartbeat (every 3 minutes) reads `heartbeat.md` in the workspace root and executes due tasks.
