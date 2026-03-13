@@ -18,6 +18,7 @@ import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-c
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
 import { verifyPRStatuses } from '../utils/github-status.js';
+import { updateStress, shouldSendLevel3Alert, markLevel3AlertSent } from './stress-tracker.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -834,6 +835,8 @@ export async function handleTeamInvocation(
   }
 
   if (isBusy(team.id)) {
+    // Stress: queue pressure
+    updateStress(config.workspacePath, team.id, 'queue_added', team.stressProfile?.sensitivity ?? 1.0);
     await waitForFree(team.id);
   }
 
@@ -972,6 +975,27 @@ async function executeInvocation(
 
     // Size-based consolidation trigger
     checkSizeBasedConsolidation(team.id, team.name, config);
+
+    // Stress: detect positive feedback in trigger message
+    const POSITIVE_KEYWORDS = ['좋아', 'PASS', '잘했', '수고', '완료', '승인', '좋습니다', '잘 했'];
+    if (POSITIVE_KEYWORDS.some(kw => triggerMsg.content.includes(kw))) {
+      updateStress(config.workspacePath, team.id, 'positive_feedback', team.stressProfile?.sensitivity ?? 1.0);
+    }
+
+    // Stress: Level 3 overload alert to leader
+    if (shouldSendLevel3Alert(config.workspacePath, team.id)) {
+      const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
+      if (leaderTeam) {
+        markLevel3AlertSent(config.workspacePath, team.id);
+        await appendToInbox(
+          leaderTeam.id,
+          'System',
+          `[과부하 알림] ${team.name} 스트레스 레벨 3 도달. 작업 재조정이 필요합니다.`,
+          config.workspacePath,
+          channelId,
+        ).catch(() => {});
+      }
+    }
 
     // Resolve any pending dispatch records (this team reported back)
     ledger.resolve(team.id, mentionedTeams.map(t => t.id));

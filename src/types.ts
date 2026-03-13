@@ -22,6 +22,15 @@ export interface GitIdentity {
   email: string;
 }
 
+export interface StressProfile {
+  sensitivity: number; // 0.5~2.0, default 1.0
+  modifiers: {
+    level1: string;
+    level2: string;
+    level3: string;
+  };
+}
+
 export interface TeamConfig {
   id: TeamId;
   name: string;
@@ -36,6 +45,7 @@ export interface TeamConfig {
   discordUserId?: string; // auto-populated on first login
   useTeams?: boolean;     // enable agent team mode for complex tasks
   teamRules?: string[];   // rules for how sub-agents are created and behave
+  stressProfile?: StressProfile; // bot personality modifiers under stress
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
   mcpServers?: Record<string, McpServerConfig>;
