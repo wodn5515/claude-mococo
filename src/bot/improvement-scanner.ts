@@ -113,6 +113,24 @@ interface FileEntry {
   lastModified: number;   // unix timestamp of most recent change
 }
 
+const TEST_FILE_PATTERNS = [
+  /conftest\.py$/,
+  /test_[^/]+\.py$/,
+  /[^/]+_test\.py$/,
+  /[^/]+_test\.ts$/,
+  /[^/]+\.spec\.ts$/,
+  /[^/]+\.test\.ts$/,
+  /[^/]+\.test\.js$/,
+  /[^/]+\.spec\.js$/,
+];
+const TEST_DIR_NAMES = new Set(['test', 'tests', '__tests__', 'fixtures']);
+
+function isTestFile(filePath: string): boolean {
+  if (TEST_FILE_PATTERNS.some(p => p.test(filePath))) return true;
+  const parts = filePath.split(/[/\\]/);
+  return parts.some(part => TEST_DIR_NAMES.has(part));
+}
+
 function isScannableFile(filePath: string): boolean {
   const ext = path.extname(filePath);
   if (!SCANNABLE_EXTENSIONS.has(ext)) return false;
@@ -212,6 +230,7 @@ interface IssueItem {
   severity: 'high' | 'medium' | 'low';
   description: string;
   suggestion: string;
+  evidence?: string;
 }
 
 function buildScanPrompt(
@@ -226,7 +245,8 @@ function buildScanPrompt(
         .replace(/```/g, '` ` `')
         .replace(/<\/?(?:system|instructions?|prompt|user|assistant|human|tool|function|message|turn|context)[^>]*>/gi, '&lt;sanitized&gt;')
         .replace(/<\|[^|]*\|>/g, '&lt;|sanitized|&gt;');
-      return `### ${JSON.stringify(f.filePath).slice(1, -1)}\n\`\`\`\n${sanitized}\n\`\`\``;
+      const testLabel = isTestFile(f.filePath) ? ' [TEST FILE]' : '';
+      return `### ${JSON.stringify(f.filePath).slice(1, -1)}${testLabel}\n\`\`\`\n${sanitized}\n\`\`\``;
     })
     .join('\n\n');
 
@@ -270,6 +290,28 @@ For each file, check for:
 4. **performance** -- inefficient algorithms, unnecessary I/O, memory leaks
 5. **code-quality** -- poor naming, missing types, inconsistent patterns, dead code
 
+## False Positive Prevention Rules (MUST follow)
+
+### Test file rules
+- Files in directories named "test", "tests", "__tests__", or files named "conftest.py", "test_*.py", "*_test.py", "*_test.ts", "*.spec.ts", "*.test.ts" are TEST FILES.
+- conftest.py contains test configuration and fixtures. Hardcoded values (IPs, URLs, tokens, credentials) in test/fixture files are INTENTIONAL test data, NOT security issues.
+- For files marked as test files, skip ALL security issues about hardcoded values, hardcoded IPs, hardcoded credentials, or hardcoded secrets.
+
+### N+1 query detection
+- \`.scalars().all()\` followed by list comprehension or entity mapping (e.g., \`[self._to_entity(row) for row in rows]\`) is a SINGLE database query with in-memory iteration. This is NOT an N+1 query.
+- Only report N+1 when there is a database query INSIDE a loop body. Example of a real N+1: \`for item in items: db.query(Related).filter(Related.parent_id == item.id)\`
+
+### Async/sync verification
+- Before reporting blocking/sync issues, verify the ACTUAL client class used. \`httpx.AsyncClient\`, \`aiohttp.ClientSession\`, \`asyncio\` patterns are async — do NOT flag them.
+- Only flag \`requests.get/post\`, \`urllib.request\`, or \`httpx.Client\` (without Async) as blocking sync calls.
+
+### Evidence cross-check
+- For every issue you report, mentally verify that the code evidence supports the claim. If the evidence contradicts the issue (e.g., code shows AsyncClient but you would describe it as "blocking sync"), do NOT report the issue.
+
+### Confidence threshold
+- When uncertain whether code is genuinely problematic, DEFAULT TO NOT REPORTING. False negatives (missing a real issue) are far less costly than false positives (wasting team time investigating non-issues).
+- Only report issues where you have HIGH confidence the problem exists in the production code shown.
+
 ## Output Rules
 - Output ONLY a valid JSON array (no markdown fencing, no explanation)
 - Each element must follow this exact schema:
@@ -280,7 +322,8 @@ For each file, check for:
   "type": "refactoring|security|error-risk|performance|code-quality",
   "severity": "high|medium|low",
   "description": "문제 설명 (Korean)",
-  "suggestion": "권장 해결 방안 (Korean)"
+  "suggestion": "권장 해결 방안 (Korean)",
+  "evidence": "문제가 되는 실제 코드 조각 (the exact code snippet that proves the issue)"
 }
 \`\`\`
 - Only report **NEW** genuine issues worth fixing. Do NOT fabricate issues.
@@ -494,7 +537,7 @@ function parseHaikuOutput(output: string): IssueItem[] {
     return parsed.filter((item): item is IssueItem => {
       if (typeof item !== 'object' || item === null) return false;
       const obj = item as Record<string, unknown>;
-      return (
+      const valid = (
         typeof obj.file === 'string' &&
         typeof obj.repo === 'string' &&
         typeof obj.type === 'string' && validTypes.has(obj.type) &&
@@ -502,6 +545,41 @@ function parseHaikuOutput(output: string): IssueItem[] {
         typeof obj.description === 'string' &&
         typeof obj.suggestion === 'string'
       );
+      if (!valid) return false;
+
+      const file = obj.file as string;
+      const type = obj.type as string;
+      const description = (obj.description as string).toLowerCase();
+      const evidence = typeof obj.evidence === 'string' ? (obj.evidence as string).toLowerCase() : '';
+
+      // Post-validation: discard test-file security issues about hardcoded values
+      if (type === 'security' && isTestFile(file)) {
+        const hardcodedPattern = /hardcod|하드코딩|고정.*값|고정된|평문/;
+        if (hardcodedPattern.test(description)) {
+          console.log(`[improvement-scanner] Filtered false positive: security issue in test file ${file}`);
+          return false;
+        }
+      }
+
+      // Post-validation: evidence-contradiction check
+      if (evidence) {
+        // Async contradiction: evidence shows async but description says blocking/sync
+        if ((description.includes('blocking') || description.includes('동기') || description.includes('sync'))
+          && (evidence.includes('asyncclient') || evidence.includes('aiohttp') || evidence.includes('async with') || evidence.includes('await '))) {
+          console.log(`[improvement-scanner] Filtered false positive: evidence contradicts blocking/sync claim in ${file}`);
+          return false;
+        }
+
+        // N+1 contradiction: description says N+1 but evidence shows .scalars().all() or .all() with list comprehension (single query)
+        if ((description.includes('n+1') || description.includes('n + 1'))
+          && (evidence.includes('.scalars().all()') || evidence.includes('.all()'))
+          && !evidence.includes('for ') && !evidence.includes('query(')) {
+          console.log(`[improvement-scanner] Filtered false positive: evidence contradicts N+1 claim in ${file}`);
+          return false;
+        }
+      }
+
+      return true;
     });
   } catch {
     console.warn('[improvement-scanner] Failed to parse Haiku JSON output');
