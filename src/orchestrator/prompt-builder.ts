@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { formatConversation } from '../teams/context.js';
 import { loadRecentEpisodes } from '../bot/episode-writer.js';
-import { getStressModifier } from '../bot/stress-tracker.js';
+import { getStressLevel } from '../bot/stress-tracker.js';
 import type { TeamConfig, TeamsConfig, TeamInvocation } from '../types.js';
 
 const MAX_INBOX_ENTRIES = 20;
@@ -490,19 +490,27 @@ ${inbox ? `\n${inbox}\n` : '(no new messages)\n'}
     ? `Human (<@${invocation.message.discordId ?? ''}>)`
     : invocation.message.teamName;
 
-  // 8. Agent teams section
+  // 8. Current Mood section — injected when stress level > 0
+  const stressLevel = getStressLevel(ws, team.id);
+  let currentMoodSection = '';
+  if (stressLevel > 0 && team.stressProfile?.modifiers) {
+    const modifier = team.stressProfile.modifiers[`level${stressLevel}` as 'level1' | 'level2' | 'level3'];
+    if (modifier) {
+      const levelLabels = ['평온', '바쁨', '압박', '과부하'];
+      currentMoodSection = `\n## Current Mood\n현재 상태: **Level ${stressLevel} — ${levelLabels[stressLevel]}**\n${modifier}\n`;
+    }
+  }
+
+  // 9. Agent teams section
   const agentTeamsSection = team.useTeams
     ? `\n## Agent Teams
 You have agent team capabilities enabled. For complex tasks that involve multiple files, parallel work, or multi-step operations, you SHOULD use the team/swarm tools to spawn sub-agents and coordinate work in parallel. This improves speed and quality. For simple single-file tasks, work directly without spawning a team.
 ${team.teamRules?.length ? `\n### Team Rules\n${team.teamRules.map(r => `- ${r}`).join('\n')}` : ''}`
     : '';
 
-  // 9. Build stress modifier (Current Mood)
-  const stressMood = getStressModifier(ws, team.id, team.stressProfile);
-
   // 10. Assemble final prompt
-  return `${template}
-${stressMood ? `\n${stressMood}\n` : ''}${sharedRules ? `\n${sharedRules}\n` : ''}${newAgentProtocol ? `\n${newAgentProtocol}\n` : ''}
+  return `${template}${currentMoodSection}
+${sharedRules ? `\n${sharedRules}\n` : ''}${newAgentProtocol ? `\n${newAgentProtocol}\n` : ''}
 ## Current Context
 Current channel: ${chId}
 Current time: ${currentTime}
