@@ -195,8 +195,10 @@ function loadInbox(ws: string, team: TeamConfig, preloadedInbox?: string): strin
 // Prompt section builders
 // ---------------------------------------------------------------------------
 
-function buildMemorySection(longTerm: string, shortTerm: string, chId: string, humanTitle: string): string {
-  return `## Long-term Memory
+function buildMemorySection(longTerm: string, shortTerm: string, chId: string, humanTitle: string, isFirstInvocation: boolean): string {
+  if (isFirstInvocation) {
+    // Full guide with examples on first invocation
+    return `## Long-term Memory
 Important knowledge that persists permanently. Only update when you have something worth keeping forever.
 Use these sections to organize:
 
@@ -246,22 +248,23 @@ Example:
 
 ⚠️ After #ch: you must write the actual Discord channel ID (numeric). Current channel ID: ${chId}
 ${shortTerm ? `\n${shortTerm}\n` : '\n(empty)\n'}`;
+  }
+
+  // Condensed version for subsequent invocations — omit examples, keep structure
+  return `## Long-term Memory
+${longTerm || '(empty)'}
+
+## Short-term Memory
+Sections: In Progress, Waiting (with #ch:channelId), Cached External Data. Current channel: ${chId}
+${shortTerm || '(empty)'}
+`;
 }
 
-function buildDiscordCommandsSection(team: TeamConfig, humanTitle: string, leaderName: string): string {
+function buildDiscordCommandsSection(team: TeamConfig, humanTitle: string, leaderName: string, isFirstInvocation: boolean): string {
   const leaderDecisionLog = `
 **Decision Log (autonomous decisions — leader only):**
-When making autonomous decisions, always include the following tag in your output:
 \`[decision:level reason="description" action="action taken"]\`
-
-Levels:
-- \`autonomous\` — Routine tasks (bug fixes, refactoring, work redistribution). Execute and log.
-- \`inform\` — Improvements within existing scope. Execute and report.
-- \`propose\` — New features, architecture changes, new tools. Await ${humanTitle} approval.
-- \`escalate\` — Security, outages, urgent. Tag ${humanTitle} immediately.
-
-Example: \`[decision:autonomous reason="duplicate code found" action="assigned refactoring to Backend team"]\`
-Example: \`[decision:propose reason="new auth system needed" action="awaiting ${humanTitle} approval"]\`
+Levels: \`autonomous\` (routine), \`inform\` (within scope), \`propose\` (new features — await ${humanTitle}), \`escalate\` (urgent — tag ${humanTitle})
 `;
 
   const memberImprovementNote = `
@@ -272,6 +275,26 @@ Example: \`<@leaderID> [found] medium: duplicate code in utils.ts, needs refacto
 The system will automatically invoke ${leaderName} for evaluation.
 `;
 
+  if (!isFirstInvocation) {
+    // Condensed version — only memory syntax reminders and role-specific section
+    return `## Discord Commands
+Syntax: \`[discord:action key=value key="quoted value"]\`
+Available actions: create/delete/rename-channel, set-topic, move-channel, create/archive/lock-thread, send-thread, create/delete-category, pin-message, react, edit/delete-message, create/delete/assign/remove-role, list-roles, list-channels, set/remove-permission.
+
+**Short-term Memory (REQUIRED every response):**
+\`\`\`
+---MEMORY---
+(current working context, pruned and updated)
+---END-MEMORY---
+\`\`\`
+**⚠️ Incomplete tasks MUST include #ch:channelId in Waiting section.**
+
+**Long-term Memory:** Use \`---LONG-MEMORY---\` / \`---END-LONG-MEMORY---\` block when updating permanent knowledge.
+**Persona:** Use \`[discord:edit-persona]\` + \`---PERSONA---\` / \`---END-PERSONA---\` block to self-edit.
+${team.isLeader ? leaderDecisionLog : memberImprovementNote}`;
+  }
+
+  // Full version with all examples — first invocation only
   return `## Discord Commands
 You can manage Discord resources by embedding commands in your output. Commands are stripped before posting.
 Syntax: \`[discord:action key=value key="quoted value"]\`
@@ -380,6 +403,19 @@ export async function buildTeamPrompt(
   const humanTitle = config.humanTitle ?? 'Boss';
   const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
   const leaderName = leaderTeam?.name ?? 'Leader';
+
+  // Conditionally load New Agent Protocol only when relevant
+  const messageContent = invocation.message.content;
+  const isNewAgentEvent = messageContent.includes('[신규 모코코 입장]')
+    || messageContent.includes('[New Agent Joined]');
+  let newAgentProtocol = '';
+  if (isNewAgentEvent) {
+    const rawProtocol = readCached(path.resolve(ws, 'prompts/new-agent-protocol.md'));
+    newAgentProtocol = rawProtocol
+      .replace(/\{\{humanTitle\}\}/g, humanTitle)
+      .replace(/\{\{leaderName\}\}/g, leaderName);
+  }
+
   const sharedRules = rawSharedRules
     .replace(/\{\{humanTitle\}\}/g, humanTitle)
     .replace(/\{\{leaderName\}\}/g, leaderName);
@@ -394,9 +430,12 @@ export async function buildTeamPrompt(
   const recentEpisodes = loadRecentEpisodes(team.id, ws);
   const currentTime = new Date().toISOString().slice(0, 16).replace('T', ' ');
 
+  // Determine if this is the first invocation for this team (no existing short-term memory)
+  const isFirstInvocation = !shortTerm;
+
   // 4. Build prompt sections
-  const memorySection = buildMemorySection(longTerm, shortTerm, chId, humanTitle);
-  const discordCommands = buildDiscordCommandsSection(team, humanTitle, leaderName);
+  const memorySection = buildMemorySection(longTerm, shortTerm, chId, humanTitle, isFirstInvocation);
+  const discordCommands = buildDiscordCommandsSection(team, humanTitle, leaderName, isFirstInvocation);
 
   // 5. Build inbox/memory instruction (leader vs member)
   const inboxInstruction = team.isLeader
@@ -425,7 +464,7 @@ ${team.teamRules?.length ? `\n### Team Rules\n${team.teamRules.map(r => `- ${r}`
 
   // 9. Assemble final prompt
   return `${template}
-${sharedRules ? `\n${sharedRules}\n` : ''}
+${sharedRules ? `\n${sharedRules}\n` : ''}${newAgentProtocol ? `\n${newAgentProtocol}\n` : ''}
 ## Current Context
 Current channel: ${chId}
 Current time: ${currentTime}
