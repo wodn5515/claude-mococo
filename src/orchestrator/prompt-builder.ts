@@ -407,9 +407,7 @@ export async function buildTeamPrompt(
   // Conditionally load New Agent Protocol only when relevant
   const messageContent = invocation.message.content;
   const isNewAgentEvent = messageContent.includes('[신규 모코코 입장]')
-    || messageContent.includes('[New Agent Joined]')
-    || messageContent.includes('신규')
-    || messageContent.includes('입장');
+    || messageContent.includes('[New Agent Joined]');
   let newAgentProtocol = '';
   if (isNewAgentEvent) {
     const rawProtocol = readCached(path.resolve(ws, 'prompts/new-agent-protocol.md'));
