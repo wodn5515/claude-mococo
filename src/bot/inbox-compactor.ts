@@ -244,6 +244,41 @@ function setPendingTaskCooldown(teamId: string): void {
   pendingTaskCooldowns.set(teamId, Date.now());
 }
 
+/**
+ * Purge expired entries from cooldown/counter Maps to prevent unbounded growth.
+ * Called periodically by a cleanup timer.
+ */
+export function purgeExpiredCooldowns(): number {
+  const now = Date.now();
+  let purged = 0;
+
+  for (const [teamId, ts] of pendingTaskCooldowns) {
+    if (now - ts >= PENDING_TASK_COOLDOWN_MS) {
+      pendingTaskCooldowns.delete(teamId);
+      purged++;
+    }
+  }
+
+  for (const [teamId, ts] of followUpCooldowns) {
+    if (now - ts >= FOLLOW_UP_COOLDOWN_MS) {
+      followUpCooldowns.delete(teamId);
+      purged++;
+    }
+  }
+
+  if (purged > 0) {
+    console.log(`[cooldown-cleanup] Purged ${purged} expired entries (pending=${pendingTaskCooldowns.size}, followUp=${followUpCooldowns.size}, nudge=${nudgeCounts.size})`);
+  }
+  return purged;
+}
+
+/** @internal — test-only access to cooldown state */
+export const _cooldownState = {
+  get pendingTaskCooldowns() { return pendingTaskCooldowns; },
+  get followUpCooldowns() { return followUpCooldowns; },
+  get nudgeCounts() { return nudgeCounts; },
+};
+
 // ---------------------------------------------------------------------------
 // Leader heartbeat — haiku triage → leader self-invoke
 // ---------------------------------------------------------------------------
@@ -743,7 +778,13 @@ export function startInboxCompactor(
   env: EnvConfig,
   triggerInvocation: InvocationHandler,
 ): void {
-  console.log('[inbox-compactor] Started: fs.watch(immediate) + queue-drain(15s) + heartbeat(3m/fallback) + follow-up(2m) + pending(60s) + digest(24h)');
+  // Guard against double-start — clean up existing timers first
+  if (activeTimers.length > 0) {
+    console.warn('[inbox-compactor] Already running — stopping existing instance before restart');
+    stopInboxCompactor();
+  }
+
+  console.log('[inbox-compactor] Started: fs.watch(immediate) + queue-drain(15s) + heartbeat(3m/fallback) + follow-up(2m) + pending(60s) + cooldown-cleanup(10m) + digest(24h)');
 
   const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
   if (!leaderTeam) {
@@ -852,6 +893,9 @@ export function startInboxCompactor(
       console.error(`[pending-task] Unhandled error: ${err}`);
     });
   }, PENDING_TASK_INTERVAL_MS));
+
+  // Cooldown cleanup: purge expired entries every 10 minutes
+  activeTimers.push(setInterval(purgeExpiredCooldowns, 10 * 60_000));
 
   // Daily digest: every 24 hours (first run after 1 hour)
   activeTimers.push(setTimeout(() => {
