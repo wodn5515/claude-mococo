@@ -15,11 +15,11 @@ import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import { appendToInbox, clearInbox } from './inbox-writer.js';
 import { startInboxCompactor } from './inbox-compactor.js';
+import { updateStress, detectPositiveFeedback, shouldSendLevel3Alert, markLevel3AlertSent } from './stress-tracker.js';
 import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
 import { verifyPRStatuses } from '../utils/github-status.js';
-import { updateStress, shouldSendLevel3Alert, markLevel3AlertSent } from './stress-tracker.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -512,6 +512,13 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           // Skip routing/invocation if message was already claimed (duplicate event) (#50)
           if (!isNewMsg) return;
 
+          // Positive feedback detection — update stress for all teams
+          if (detectPositiveFeedback(content)) {
+            for (const t of Object.values(config.teams)) {
+              updateStress(config.workspacePath, t.id, 'positive_feedback', t.stressProfile);
+            }
+          }
+
           const targetTeams = routeMessage(content, true, config);
           const chain = newChain();
           for (const target of targetTeams) {
@@ -739,7 +746,7 @@ export async function handleTeamInvocation(
 
   if (isBusy(team.id)) {
     // Stress: queue pressure
-    updateStress(config.workspacePath, team.id, 'queue_added', team.stressProfile?.sensitivity ?? 1.0);
+    updateStress(config.workspacePath, team.id, 'queue_added', team.stressProfile);
     await waitForFree(team.id);
   }
 
@@ -880,9 +887,8 @@ async function executeInvocation(
     checkSizeBasedConsolidation(team.id, team.name, config);
 
     // Stress: detect positive feedback in trigger message
-    const POSITIVE_KEYWORDS = ['좋아', 'PASS', '잘했', '수고', '완료', '승인', '좋습니다', '잘 했'];
-    if (POSITIVE_KEYWORDS.some(kw => triggerMsg.content.includes(kw))) {
-      updateStress(config.workspacePath, team.id, 'positive_feedback', team.stressProfile?.sensitivity ?? 1.0);
+    if (detectPositiveFeedback(triggerMsg.content)) {
+      updateStress(config.workspacePath, team.id, 'positive_feedback', team.stressProfile);
     }
 
     // Stress: Level 3 overload alert to leader

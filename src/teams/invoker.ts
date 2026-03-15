@@ -94,16 +94,16 @@ export async function invokeTeam(
 
   try {
     const result = await Promise.race([enginePromise, timeoutPromise]);
-
-    // Update stress based on outcome
-    const sensitivity = team.stressProfile?.sensitivity ?? 1.0;
+    const ws = config.workspacePath;
     if (result.timedOut) {
-      updateStress(config.workspacePath, team.id, 'task_failed', sensitivity);
+      updateStress(ws, team.id, 'task_timeout', team.stressProfile);
     } else {
-      updateStress(config.workspacePath, team.id, 'task_complete', sensitivity);
+      updateStress(ws, team.id, 'task_complete', team.stressProfile);
     }
-
     return result;
+  } catch (err) {
+    updateStress(config.workspacePath, team.id, 'task_failed', team.stressProfile);
+    throw err;
   } finally {
     clearTimeout(timeoutId!);
     cleanupListeners();

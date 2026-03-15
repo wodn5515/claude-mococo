@@ -828,6 +828,13 @@ export function startInboxCompactor(
   let pendingInboxInvoke = false;
 
   const executeHeartbeat = () => {
+    // Decay stress for all teams on every heartbeat tick
+    for (const teamId of Object.keys(config.teams)) {
+      try { decayStress(ws, teamId); } catch (err) {
+        console.warn(`[heartbeat] decayStress failed for ${teamId}:`, err);
+      }
+    }
+
     leaderHeartbeat(config, env, triggerInvocation).catch(err => {
       console.error(`[heartbeat] Unhandled error: ${err}`);
     });

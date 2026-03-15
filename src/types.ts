@@ -23,7 +23,8 @@ export interface GitIdentity {
 }
 
 export interface StressProfile {
-  sensitivity: number; // 0.5~2.0, default 1.0
+  /** Multiplier applied to all stress score deltas. Range: 0.5–2.0. Default: 1.0 */
+  sensitivity: number;
   modifiers: {
     level1: string;
     level2: string;
@@ -45,7 +46,7 @@ export interface TeamConfig {
   discordUserId?: string; // auto-populated on first login
   useTeams?: boolean;     // enable agent team mode for complex tasks
   teamRules?: string[];   // rules for how sub-agents are created and behave
-  stressProfile?: StressProfile; // bot personality modifiers under stress
+  stressProfile?: StressProfile; // persona modifier based on workload/stress
   git: GitIdentity;
   discordToken: string;         // each team has its own Discord bot
   mcpServers?: Record<string, McpServerConfig>;
