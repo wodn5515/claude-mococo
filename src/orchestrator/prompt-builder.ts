@@ -124,17 +124,31 @@ function buildTeamDirectory(config: TeamsConfig, currentTeamId: string): string 
     .join('\n');
 }
 
-function loadRepoContext(ws: string, messageContent: string): { repoRules: string; repoList: string } {
-  // Repo-specific rules
-  let repoRules = '';
-  const repoMatch = messageContent.match(/repos\/(\S+)/);
-  if (repoMatch) {
-    const repoRulesPath = path.resolve(ws, `prompts/repo-specific/${repoMatch[1]}.md`);
-    if (fs.existsSync(repoRulesPath)) {
-      repoRules = `\n\n## Repository-Specific Rules\n${fs.readFileSync(repoRulesPath, 'utf-8')}`;
+/**
+ * Detect which repository the message is about.
+ * Priority: explicit `repos/<name>` path > known repo name mention.
+ */
+export function detectRepoName(messageContent: string, knownRepos: string[]): string | null {
+  // 1. Explicit path reference: repos/<name>
+  const pathMatch = messageContent.match(/repos\/(\S+)/);
+  if (pathMatch) {
+    const candidate = pathMatch[1].replace(/\/+$/, ''); // strip trailing slashes
+    if (knownRepos.includes(candidate)) return candidate;
+  }
+
+  // 2. Known repo name mentioned in message (case-insensitive, word-boundary)
+  for (const repo of knownRepos) {
+    // Escape regex special chars in repo name (e.g. "atom.io")
+    const escaped = repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(?:^|[\\s/\`"'(])${escaped}(?:[\\s/\`"').,;:!?]|$)`, 'i').test(messageContent)) {
+      return repo;
     }
   }
 
+  return null;
+}
+
+function loadRepoContext(ws: string, messageContent: string): { repoRules: string; repoList: string; detectedRepo: string | null } {
   // Available repos
   let repos: string[] = [];
   try {
@@ -146,7 +160,27 @@ function loadRepoContext(ws: string, messageContent: string): { repoRules: strin
     ? repos.map(r => `- repos/${r}`).join('\n')
     : '(no repos linked yet)';
 
-  return { repoRules, repoList };
+  // Detect which repo is being discussed
+  const detectedRepo = detectRepoName(messageContent, repos);
+
+  let repoRules = '';
+  if (detectedRepo) {
+    // Priority 1: AGENT.md in repo root
+    const agentMdPath = path.resolve(ws, `repos/${detectedRepo}/AGENT.md`);
+    const agentMd = readCached(agentMdPath);
+    if (agentMd) {
+      repoRules = `\n\n## Repository Context (${detectedRepo}/AGENT.md)\n${agentMd}`;
+    } else {
+      // Priority 2: Legacy prompts/repo-specific fallback
+      const legacyPath = path.resolve(ws, `prompts/repo-specific/${detectedRepo}.md`);
+      const legacy = readCached(legacyPath);
+      if (legacy) {
+        repoRules = `\n\n## Repository-Specific Rules\n${legacy}`;
+      }
+    }
+  }
+
+  return { repoRules, repoList, detectedRepo };
 }
 
 function migrateAndLoadMemory(ws: string, teamId: string): { longTerm: string; shortTerm: string } {
@@ -423,7 +457,7 @@ export async function buildTeamPrompt(
 
   // 2. Build dynamic context
   const teamDirectory = buildTeamDirectory(config, team.id);
-  const { repoRules, repoList } = loadRepoContext(ws, invocation.message.content);
+  const { repoRules, repoList, detectedRepo } = loadRepoContext(ws, invocation.message.content);
   const { longTerm, shortTerm } = migrateAndLoadMemory(ws, team.id);
   const inbox = loadInbox(ws, team, preloadedInbox);
 
@@ -510,7 +544,7 @@ From: ${triggerFrom}
 Content: ${invocation.message.content}
 
 ## Available Repositories
-${repoList}
+${repoList}${detectedRepo ? `\n\n**Active repository:** repos/${detectedRepo}` : ''}
 ${repoRules}
 
 ## Your Identity
