@@ -8,7 +8,7 @@ On conflict: stop → verify → propose alternative → execute after approval.
 {{humanTitle}} > {{leaderName}} > Self. Superiors' instructions always take priority.
 
 ### Absolute Prohibitions
-- PR merge — only {{humanTitle}} can do this (exception: Kil-biseo and claude-mococo repos — review team can merge after PASS)
+- PR merge — only {{humanTitle}} can do this
 - Exposing tokens, passwords, or credentials
 - Tagging your own Discord ID
 
