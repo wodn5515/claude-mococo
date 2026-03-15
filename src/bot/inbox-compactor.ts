@@ -190,6 +190,8 @@ type InvocationHandler = (
 // ---------------------------------------------------------------------------
 
 let heartbeatRunning = false;
+let heartbeatStartedAt = 0;
+const HEARTBEAT_STUCK_TIMEOUT_MS = 5 * 60_000; // 5 minutes — auto-reset if stuck
 
 // Cooldown tracker for pending task loop — tracks last invoke time per team
 const pendingTaskCooldowns = new Map<string, number>();
@@ -323,8 +325,14 @@ async function leaderHeartbeat(
   env: EnvConfig,
   triggerInvocation: InvocationHandler,
 ): Promise<void> {
+  // Safety: auto-reset stuck mutex (e.g., if a previous invocation hangs beyond 5 minutes)
+  if (heartbeatRunning && heartbeatStartedAt > 0 && Date.now() - heartbeatStartedAt > HEARTBEAT_STUCK_TIMEOUT_MS) {
+    console.warn(`[heartbeat] Force-resetting stuck heartbeatRunning mutex (stuck for ${Math.round((Date.now() - heartbeatStartedAt) / 1000)}s)`);
+    heartbeatRunning = false;
+  }
   if (heartbeatRunning) return;
   heartbeatRunning = true;
+  heartbeatStartedAt = Date.now();
 
   try {
     const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
@@ -532,6 +540,7 @@ async function leaderHeartbeat(
     console.error(`[heartbeat] Error: ${err}`);
   } finally {
     heartbeatRunning = false;
+    heartbeatStartedAt = 0;
   }
 }
 
@@ -588,7 +597,10 @@ async function followUpLoop(
         mentions: [team.id],
       };
       addMessage(record.channelId, nudgeMsg);
-      if (isOccupied(team.id)) {
+      // Fresh resolved check — record may have been resolved by another path since getUnresolved()
+      if (record.resolved) {
+        console.log(`[follow-up] ${team.name} record resolved before nudge invocation, skipping`);
+      } else if (isOccupied(team.id)) {
         console.log(`[follow-up] ${team.name} became occupied during nudge, skipping invocation`);
       } else {
         triggerInvocation(team, nudgeMsg, record.channelId, config, env, newChain());
@@ -763,6 +775,7 @@ export function stopInboxCompactor(): void {
   lastHeartbeatFingerprint = null;
   lastHeartbeatInvokeAt = 0;
   heartbeatRunning = false;
+  heartbeatStartedAt = 0;
   pendingTaskCooldowns.clear();
   nudgeCounts.clear();
   followUpCooldowns.clear();

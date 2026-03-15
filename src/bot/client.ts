@@ -472,8 +472,10 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
         if (!content) return;
 
         if (team.isLeader) {
-          // Claim message synchronously BEFORE any await to prevent race condition
-          // with non-leader handlers that could interleave during async operations
+          // Claim message atomically (synchronous check+set before any await)
+          // to prevent duplicate processing across leader/non-leader handlers (#50).
+          // Node.js single-threaded event loop guarantees no interleaving between
+          // has() and set() — the second handler always sees the claimed msgId.
           const isNewMsg = !processedMsgIds.has(msg.id);
           if (isNewMsg) {
             processedMsgIds.set(msg.id, Date.now());
@@ -501,11 +503,14 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           // Leader reads every message — append to inbox for memory processing
           // Skip inbox when human directly mentions non-leader bots (direct command, no leader relay needed)
           const isHumanDirectToNonLeader = msg.author.id === config.humanDiscordId && mentionsOtherBot;
-          if (!isHumanDirectToNonLeader) {
+          if (isNewMsg && !isHumanDirectToNonLeader) {
             await appendToInbox(team.id, msg.author.displayName, content, config.workspacePath, msg.channelId).catch(() => {});
           }
 
           if (mentionsOtherBot) return;
+
+          // Skip routing/invocation if message was already claimed (duplicate event) (#50)
+          if (!isNewMsg) return;
 
           const targetTeams = routeMessage(content, true, config);
           const chain = newChain();
