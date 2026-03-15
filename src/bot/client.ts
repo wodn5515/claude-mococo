@@ -13,6 +13,7 @@ import { isBusy, isQueued, markBusy, markFree, waitForFree, getStatus } from '..
 import { ledger } from '../teams/dispatch-ledger.js';
 import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
+import { appendToInbox, clearInbox } from './inbox-writer.js';
 import { startInboxCompactor } from './inbox-compactor.js';
 import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
@@ -34,111 +35,6 @@ export const teamClients = new Map<string, Client>();
 // Module-level interval tracking to prevent leaks on createBots() re-invocation
 let _msgCleanupInterval: ReturnType<typeof setInterval> | null = null;
 const _cleanupSignalHandlers: (() => void)[] = [];
-
-// ---------------------------------------------------------------------------
-// Inbox helpers — append chat to a team's inbox file for memory processing
-// ---------------------------------------------------------------------------
-
-// cancelled 플래그로 timeout 후 task 실행을 방지하여 race condition 해결
-interface InboxTask {
-  fn: () => Promise<void>;
-  cancelled: boolean;
-}
-
-const inboxWriteQueue: InboxTask[] = [];
-let isProcessingInboxQueue = false;
-let inboxQueueHead = 0;
-
-async function processInboxWriteQueue() {
-  if (isProcessingInboxQueue || inboxQueueHead >= inboxWriteQueue.length) return;
-  isProcessingInboxQueue = true;
-
-  try {
-    while (inboxQueueHead < inboxWriteQueue.length) {
-      const task = inboxWriteQueue[inboxQueueHead];
-      inboxWriteQueue[inboxQueueHead] = null as any; // Release reference for GC
-      inboxQueueHead++;
-      if (task.cancelled) continue; // timeout으로 취소된 task 스킵 (실행 전 1차 확인)
-      try {
-        if (task.cancelled) continue; // 실행 직전 2차 확인 — timeout race condition 방지
-        await task.fn();
-      } catch (err) {
-        console.error('[inbox-queue] Write failed:', err);
-      }
-    }
-  } finally {
-    isProcessingInboxQueue = false;
-    // drain 완료 후 새 항목이 추가되었는지 확인하여 재처리
-    if (inboxQueueHead < inboxWriteQueue.length) {
-      processInboxWriteQueue().catch(err => console.error('[inbox-queue] Drain error:', err));
-    } else {
-      // 완전히 비었을 때만 참조 해제
-      inboxWriteQueue.length = 0;
-      inboxQueueHead = 0;
-    }
-  }
-}
-
-export function appendToInbox(teamId: string, from: string, content: string, workspacePath: string, channelId: string) {
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      task.cancelled = true;
-      console.warn(`[inbox-queue] Timed out writing to ${teamId} inbox (30s)`);
-      reject(new Error(`[inbox-queue] Timed out writing to ${teamId} inbox`));
-    }, 30_000);
-
-    const task: InboxTask = {
-      fn: async () => {
-        if (task.cancelled || settled) return; // cancelled 플래그 이중 확인 — timeout race condition 방지
-        try {
-          const dir = path.resolve(workspacePath, '.mococo/inbox');
-          fs.mkdirSync(dir, { recursive: true });
-          const file = path.resolve(dir, `${teamId}.md`);
-          const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
-          // Flatten multi-line content into single line to prevent summarizeInbox parse failures
-          const flat = content.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ');
-          if (settled) return; // I/O 직전 재확인 — timeout race condition 방지
-          await fs.promises.appendFile(file, `[${ts} #ch:${channelId}] ${from}: ${flat}\n`);
-          if (settled) {
-            // timeout 이후 write 완료 — 데이터는 기록됐지만 promise는 이미 reject됨
-            console.warn(`[inbox-queue] Write for ${teamId} completed after timeout — data written but promise already rejected`);
-            return;
-          }
-          settled = true;
-          clearTimeout(timeout);
-          resolve();
-        } catch (err) {
-          if (settled) {
-            console.warn(`[inbox-queue] Write for ${teamId} failed after timeout:`, err instanceof Error ? err.message : err);
-            return;
-          }
-          settled = true;
-          clearTimeout(timeout);
-          reject(err);
-        }
-      },
-      cancelled: false,
-    };
-
-    inboxWriteQueue.push(task);
-    processInboxWriteQueue().catch(err => console.error('[inbox-queue] Queue error:', err));
-  });
-}
-
-export function clearInbox(teamId: string, workspacePath: string) {
-  const file = path.resolve(workspacePath, '.mococo/inbox', `${teamId}.md`);
-  try {
-    fs.unlinkSync(file);
-  } catch (err: any) {
-    if (err?.code !== 'ENOENT') {
-      console.error(`[clearInbox] Failed to delete ${file}:`, err);
-    }
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Chain helpers — prevent infinite bot-to-bot loops
