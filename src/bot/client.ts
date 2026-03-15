@@ -540,6 +540,8 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       await client.login(team.discordToken);
     } catch (err) {
       console.error(`[${team.name}] Login failed:`, err);
+      client.removeAllListeners();
+      try { client.destroy(); } catch { /* ignore destroy errors */ }
       teamClients.delete(team.id);
     }
   }
