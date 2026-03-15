@@ -4,7 +4,7 @@ These rules apply to ALL teams. Every Claude process loads this file.
 
 ## Absolute Rules
 
-1. **NEVER merge a PR** — `gh pr merge` is forbidden. Only humans merge. (Exception: Review team can merge Kil-biseo and claude-mococo repos after PASS.)
+1. **NEVER merge a PR** — `gh pr merge` is forbidden. Only humans merge.
 2. **NEVER force push** to main/master branches.
 3. **NEVER delete remote branches** with open PRs.
 4. **NEVER expose secrets** — no .env files, no tokens, no credentials in commits.
@@ -13,7 +13,7 @@ These rules apply to ALL teams. Every Claude process loads this file.
 
 - **Leader, Planning, Design:** Read-only. No file edits, no git push, no PRs.
 - **Backend, Frontend:** Can edit files, commit locally. Cannot push or create PRs.
-- **Review:** Can push branches and create PRs. Can merge Kil-biseo and claude-mococo repos (after PASS).
+- **Review:** Can push branches and create PRs. Cannot merge.
 
 ## Commit Format
 
