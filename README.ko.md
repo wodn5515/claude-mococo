@@ -23,7 +23,7 @@
 | **대장코코** | `leader` | Claude | sonnet | 지휘·조율, 모든 메시지 응답, 하트비트 실행 | 읽기 전용 (파일 편집·git 불가) |
 | **스택코코** | `stack` | Claude | opus | 백엔드 API, DB 설계·구현 | 파일 편집 + 로컬 커밋 (푸시·머지 불가) |
 | **브러쉬코코** | `brush` | Claude | sonnet | UI/UX 구현, Figma 연동 | 파일 편집 + 로컬 커밋 (푸시·머지 불가) |
-| **체커코코** | `checker` | Claude | sonnet | QA, PR 리뷰, 노션 문서화 | 읽기 전용 + Kil-biseo 레포 PR 머지 가능 |
+| **체커코코** | `checker` | Claude | sonnet | QA, PR 리뷰, 노션 문서화 | 읽기 전용 + Kil-biseo/claude-mococo 레포 PR 머지 가능 |
 
 > 팀 구성은 자유롭게 설계할 수 있습니다. 위는 mococo-corps 기준 예시입니다.
 
@@ -149,7 +149,7 @@ Discord 채널에서 봇에게 말을 걸면 됩니다.
 실제 mococo-corps 권한 구조:
 - **대장코코:** 파일 편집·git push·gh pr 전부 차단. 판단·조율만.
 - **스택코코/브러쉬코코:** 파일 편집·로컬 커밋 가능. push·merge 불가.
-- **체커코코:** 읽기 전용. 단, Kil-biseo 레포 PR 머지는 조건부 허용.
+- **체커코코:** 읽기 전용. 단, Kil-biseo/claude-mococo 레포 PR 머지는 조건부 허용.
 
 ### 메모리 시스템
 
@@ -244,7 +244,7 @@ Notion MCP를 연동하면 에이전트가 직접 문서를 생성하고 관리�
 |------|--------------|----------------|------------|
 | atom.io | `master` | `staging` | 회장님 |
 | Kil-biseo | `main` | `main` | 체커코코 (리뷰+CI 통과 조건) |
-| claude-mococo | `main` | `main` | 회장님 |
+| claude-mococo | `main` | `main` | 체커코코 (리뷰 PASS 조건) |
 | orbi-advance | `prod` | `prod` | 회장님 |
 
 레포별 정책은 에이전트 성격 파일 내 **레포별 관리 전략** 섹션에 명시합니다.

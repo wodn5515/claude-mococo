@@ -215,7 +215,7 @@ Example:
 
 ### Policies & Rules
 Example:
-- PR merge is ${humanTitle}-only
+- PR merge is ${humanTitle}-only (exception: review team can merge Kil-biseo and claude-mococo repos)
 - Hotfixes can be autonomous, feature additions need proposal
 
 ### Team Capabilities
