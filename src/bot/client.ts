@@ -34,7 +34,8 @@ export const teamClients = new Map<string, Client>();
 
 // Module-level interval tracking to prevent leaks on createBots() re-invocation
 let _msgCleanupInterval: ReturnType<typeof setInterval> | null = null;
-const _cleanupSignalHandlers: (() => void)[] = [];
+let _sigintHandler: (() => void) | null = null;
+let _sigtermHandler: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Chain helpers — prevent infinite bot-to-bot loops
@@ -255,11 +256,15 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
   if (_msgCleanupInterval !== null) {
     clearInterval(_msgCleanupInterval);
   }
-  for (const handler of _cleanupSignalHandlers) {
-    process.removeListener('SIGINT', handler);
-    process.removeListener('SIGTERM', handler);
+  // Remove previous signal handlers to prevent accumulation on re-invocation
+  if (_sigintHandler) {
+    process.removeListener('SIGINT', _sigintHandler);
+    _sigintHandler = null;
   }
-  _cleanupSignalHandlers.length = 0;
+  if (_sigtermHandler) {
+    process.removeListener('SIGTERM', _sigtermHandler);
+    _sigtermHandler = null;
+  }
 
   // 주기적 정리: 2분마다 만료 항목 전체 제거
   _msgCleanupInterval = setInterval(() => {
@@ -277,9 +282,10 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       _msgCleanupInterval = null;
     }
   };
-  _cleanupSignalHandlers.push(clearCleanupInterval);
-  process.once('SIGINT', clearCleanupInterval);
-  process.once('SIGTERM', clearCleanupInterval);
+  _sigintHandler = clearCleanupInterval;
+  _sigtermHandler = clearCleanupInterval;
+  process.once('SIGINT', _sigintHandler);
+  process.once('SIGTERM', _sigtermHandler);
 
   // Forward hook events as team progress in Discord
   // Remove previous listeners to prevent accumulation on repeated createBots() calls
@@ -457,7 +463,11 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       });
 
       client.on('guildMemberRemove', async (member) => {
-        updateMemberTracking('leave', member as GuildMember, config.workspacePath);
+        try {
+          updateMemberTracking('leave', member as GuildMember, config.workspacePath);
+        } catch (err) {
+          console.error(`[${team.name}] guildMemberRemove error:`, err);
+        }
       });
     }
 
@@ -866,16 +876,18 @@ async function executeInvocation(
       await sendAsTeam(channelId, team, finalOutput);
     }
 
-    // Record in conversation history
+    // Record in conversation history (skip if output is null/empty)
     const mentionedTeams = findMentionedTeams(result.output, config);
-    const teamMsg: ConversationMessage = {
-      teamId: team.id,
-      teamName: team.name,
-      content: finalOutput,
-      timestamp: new Date(),
-      mentions: mentionedTeams.map(t => t.id),
-    };
-    addMessage(channelId, teamMsg);
+    if (finalOutput) {
+      const teamMsg: ConversationMessage = {
+        teamId: team.id,
+        teamName: team.name,
+        content: finalOutput,
+        timestamp: new Date(),
+        mentions: mentionedTeams.map(t => t.id),
+      };
+      addMessage(channelId, teamMsg);
+    }
 
     // Write episode (await — must complete before markFree to prevent race with compactEpisodes)
     await writeEpisode(
@@ -895,14 +907,19 @@ async function executeInvocation(
     if (shouldSendLevel3Alert(config.workspacePath, team.id)) {
       const leaderTeam = Object.values(config.teams).find(t => t.isLeader);
       if (leaderTeam) {
-        markLevel3AlertSent(config.workspacePath, team.id);
-        await appendToInbox(
-          leaderTeam.id,
-          'System',
-          `[과부하 알림] ${team.name} 스트레스 레벨 3 도달. 작업 재조정이 필요합니다.`,
-          config.workspacePath,
-          channelId,
-        ).catch(() => {});
+        try {
+          await appendToInbox(
+            leaderTeam.id,
+            'System',
+            `[과부하 알림] ${team.name} 스트레스 레벨 3 도달. 작업 재조정이 필요합니다.`,
+            config.workspacePath,
+            channelId,
+          );
+          // Only mark as sent after successful inbox write to avoid missing alerts on failure
+          markLevel3AlertSent(config.workspacePath, team.id);
+        } catch {
+          console.warn(`[${team.name}] Failed to send Level 3 alert to inbox, will retry next cycle`);
+        }
       }
     }
 
