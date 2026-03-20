@@ -537,6 +537,10 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           if (targetTeams.some(t => t.isLeader)) {
             markDirectInvoke();
           }
+          // Immediately show typing indicator before invocation begins
+          if (targetTeams.length > 0) {
+            (msg.channel as TextChannel).sendTyping().catch(() => {});
+          }
           const chain = newChain();
           for (const target of targetTeams) {
             handleTeamInvocation(target, humanMsg, msg.channelId, config, env, chain);
@@ -557,6 +561,8 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             evictOldestIfNeeded();
             addMessage(msg.channelId, humanMsg);
           }
+          // Immediately show typing indicator before invocation begins
+          (msg.channel as TextChannel).sendTyping().catch(() => {});
           handleTeamInvocation(team, humanMsg, msg.channelId, config, env, newChain());
         }
       } catch (err) {
