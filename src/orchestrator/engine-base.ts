@@ -21,7 +21,20 @@ export abstract class BaseEngine extends EventEmitter {
 
   /** Whitelist of env vars safe to pass to child processes */
   private static readonly ENV_WHITELIST = [
+    // System basics
     'PATH', 'HOME', 'SHELL', 'USER', 'LANG', 'TERM', 'NODE_ENV',
+    // API keys for AI engines
+    'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
+    // Git / GitHub
+    'SSH_AUTH_SOCK', 'GITHUB_TOKEN', 'GH_TOKEN',
+    // Temp directories
+    'TMPDIR', 'TMP', 'TEMP',
+    // XDG config
+    'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+    // Terminal output
+    'NO_COLOR', 'FORCE_COLOR',
+    // Proxy settings
+    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
   ] as const;
 
   /** Common env vars for all engines: git identity + safe subset of env */
