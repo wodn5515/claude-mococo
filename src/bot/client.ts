@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
-  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
+  Client, EmbedBuilder, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   type GuildMember, type TextChannel, type Message, type ChatInputCommandInteraction,
 } from 'discord.js';
 import { atomicWriteSync } from '../utils/fs.js';
@@ -20,6 +20,7 @@ import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-c
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
 import { handleDashboardCommand, saveTaskMetrics } from './dashboard.js';
+import { buildHistoryEmbeds } from './history-command.js';
 import { verifyPRStatuses } from '../utils/github-status.js';
 import { initTaskPersistence } from './heartbeat-tasks.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
@@ -740,6 +741,15 @@ async function handleAdminCommand(
   if (content === '!dashboard') {
     await handleDashboardCommand(msg, config);
     saveTaskMetrics(config);
+    return true;
+  }
+
+  if (content.startsWith('!history')) {
+    const parts = content.split(/\s+/);
+    const agentArg = parts[1] ?? undefined;
+    const countArg = parts[2] ? parseInt(parts[2], 10) : undefined;
+    const embeds = buildHistoryEmbeds(config, agentArg, countArg);
+    await msg.reply({ embeds });
     return true;
   }
 
