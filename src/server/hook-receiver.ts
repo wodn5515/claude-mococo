@@ -24,6 +24,17 @@ export function startHookServer(port: number) {
       return;
     }
 
+    // Bearer token authentication (optional — only enforced when HOOK_SECRET is set)
+    const hookSecret = process.env.HOOK_SECRET;
+    if (hookSecret) {
+      const auth = req.headers.authorization;
+      if (!auth || auth !== `Bearer ${hookSecret}`) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end('{"error":"unauthorized"}');
+        return;
+      }
+    }
+
     let body = '';
     let size = 0;
     let aborted = false;
