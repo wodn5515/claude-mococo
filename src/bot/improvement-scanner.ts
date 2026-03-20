@@ -249,8 +249,8 @@ function buildScanPrompt(
     .map(f => {
       const sanitized = f.content
         .replace(/```/g, '` ` `')
-        .replace(/<\/?(?:system|instructions?|prompt|user|assistant|human|tool|function|message|turn|context)[^>]*>/gi, '[SANITIZED:system]')
-        .replace(/<\|[^|]*\|>/g, '[SANITIZED:delimiter]');
+        .replace(/<\/?(?:system|instructions?|prompt|user|assistant|human|tool|function|message|turn|context)[^>]*>/gi, '&lt;sanitized&gt;')
+        .replace(/<\|[^|]*\|>/g, '&lt;|sanitized|&gt;');
       const testTag = isTestFile(f.filePath) ? ' [TEST FILE]' : '';
       return `### ${JSON.stringify(f.filePath).slice(1, -1)}${testTag}\n\`\`\`\n${sanitized}\n\`\`\``;
     })
