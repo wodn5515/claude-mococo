@@ -2,6 +2,10 @@
 // Heartbeat TaskRegistry — replaces heartbeat.md with type-safe task definitions
 // ---------------------------------------------------------------------------
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { atomicWriteSync } from '../utils/fs.js';
+
 export type HeartbeatSchedule = 'daily' | 'weekly' | 'hourly' | 'periodic' | 'on-demand';
 
 export interface HeartbeatTaskDef {
@@ -108,9 +112,72 @@ const staticTasks: HeartbeatTaskDef[] = [
   },
 ];
 
-// Runtime tasks added via Discord command (transient — lost on restart)
+// Runtime tasks — persisted to disk so they survive restarts
 const runtimeTasks: HeartbeatTaskDef[] = [];
 let runtimeIdCounter = 0;
+
+// ---------------------------------------------------------------------------
+// Persistence layer — file-based storage for runtime tasks
+// ---------------------------------------------------------------------------
+
+let _persistPath: string | null = null;
+
+interface PersistedState {
+  tasks: HeartbeatTaskDef[];
+  idCounter: number;
+}
+
+function persistToDisk(): void {
+  if (!_persistPath) return;
+  try {
+    const dir = path.dirname(_persistPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const state: PersistedState = { tasks: runtimeTasks, idCounter: runtimeIdCounter };
+    atomicWriteSync(_persistPath, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.warn('[heartbeat-tasks] Failed to persist runtime tasks:', err);
+  }
+}
+
+function loadFromDisk(): void {
+  if (!_persistPath) return;
+  try {
+    const raw = fs.readFileSync(_persistPath, 'utf-8');
+    const state: PersistedState = JSON.parse(raw);
+    if (Array.isArray(state.tasks)) {
+      runtimeTasks.length = 0;
+      for (const t of state.tasks) {
+        // Validate required fields before restoring
+        if (t.id && t.description && t.schedule) {
+          runtimeTasks.push({
+            id: t.id,
+            description: t.description,
+            schedule: t.schedule,
+            assignee: t.assignee ?? null,
+            enabled: t.enabled ?? true,
+          });
+        }
+      }
+    }
+    if (typeof state.idCounter === 'number') {
+      runtimeIdCounter = state.idCounter;
+    }
+    if (runtimeTasks.length > 0) {
+      console.log(`[heartbeat-tasks] Restored ${runtimeTasks.length} runtime tasks from disk`);
+    }
+  } catch {
+    // File doesn't exist or is invalid — start fresh (not an error on first run)
+  }
+}
+
+/**
+ * Initialize the persistence layer. Call once at startup with the workspace path.
+ * Loads any previously saved runtime tasks from disk.
+ */
+export function initTaskPersistence(workspacePath: string): void {
+  _persistPath = path.resolve(workspacePath, '.mococo', 'runtime-tasks.json');
+  loadFromDisk();
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -137,6 +204,7 @@ export function addRuntimeTask(
     enabled: true,
   };
   runtimeTasks.push(task);
+  persistToDisk();
   return task;
 }
 
@@ -144,6 +212,7 @@ export function removeRuntimeTask(id: string): boolean {
   const idx = runtimeTasks.findIndex(t => t.id === id);
   if (idx === -1) return false;
   runtimeTasks.splice(idx, 1);
+  persistToDisk();
   return true;
 }
 
@@ -170,4 +239,5 @@ export function toHeartbeatTasks(): { section: HeartbeatSchedule; content: strin
 export function _resetRuntimeForTesting(): void {
   runtimeTasks.length = 0;
   runtimeIdCounter = 0;
+  _persistPath = null;
 }
