@@ -4,6 +4,7 @@ import { atomicWriteSync } from '../utils/fs.js';
 import { isBusy, isQueued } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { loadRecentEpisodes } from './episode-writer.js';
+import type { StressProfile } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,16 +27,6 @@ export interface StressState {
   lastUpdated: number;  // Unix ms
   lastDecayAt: number;  // Unix ms — for time-based continuous decay
   lastAlertAt: number;  // Unix ms — Level 3 alert spam prevention
-}
-
-export interface StressProfile {
-  /** Multiplier applied to all score deltas. Range: 0.5–2.0. Default: 1.0 */
-  sensitivity: number;
-  modifiers: {
-    level1: string;
-    level2: string;
-    level3: string;
-  };
 }
 
 // ---------------------------------------------------------------------------
