@@ -20,6 +20,7 @@ import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-c
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
 import { verifyPRStatuses } from '../utils/github-status.js';
+import { initTaskPersistence } from './heartbeat-tasks.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -557,6 +558,9 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       teamClients.delete(team.id);
     }
   }
+
+  // Restore persisted runtime tasks before starting background tasks
+  initTaskPersistence(config.workspacePath);
 
   // Start periodic background tasks
   startInboxCompactor(config, env, handleTeamInvocation);
