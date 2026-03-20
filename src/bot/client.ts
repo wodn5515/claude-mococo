@@ -19,6 +19,7 @@ import { updateStress, detectPositiveFeedback, shouldSendLevel3Alert, markLevel3
 import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
+import { handleDashboardCommand, saveTaskMetrics } from './dashboard.js';
 import { verifyPRStatuses } from '../utils/github-status.js';
 import { initTaskPersistence } from './heartbeat-tasks.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
@@ -733,6 +734,12 @@ async function handleAdminCommand(
       repos = fs.readdirSync(path.resolve(config.workspacePath, 'repos')).filter(f => f !== '.gitkeep');
     } catch {}
     await msg.reply(repos.map(r => `- **${r}**`).join('\n') || 'No repos linked.');
+    return true;
+  }
+
+  if (content === '!dashboard') {
+    await handleDashboardCommand(msg, config);
+    saveTaskMetrics(config);
     return true;
   }
 
