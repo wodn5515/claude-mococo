@@ -11,6 +11,16 @@ export async function runDev(): Promise<void> {
   const thisFile = fileURLToPath(import.meta.url);
   const projectRoot = path.resolve(path.dirname(thisFile), '..', '..', '..');
 
+  // Validate projectRoot to prevent shell command injection via metacharacters
+  const safePathPattern = /^[a-zA-Z0-9/_\-. :\\]+$/;
+  if (!safePathPattern.test(projectRoot)) {
+    console.error(
+      `Unsafe project root path detected: "${projectRoot}". ` +
+      'Path must only contain alphanumeric characters, /, \\, -, _, ., :, and spaces.',
+    );
+    process.exit(1);
+  }
+
   // Ensure .restart-trigger exists
   const triggerFile = path.join(projectRoot, '.restart-trigger');
   try {
