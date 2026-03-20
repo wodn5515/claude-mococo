@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runHaiku } from '../utils/haiku.js';
-import { atomicWriteSync } from '../utils/fs.js';
+import { atomicWriteSync, withFileLock } from '../utils/fs.js';
 import { isBusy, isQueued } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { addMessage } from '../teams/context.js';
@@ -353,71 +353,72 @@ async function leaderHeartbeat(
     const highIssueKeys: string[] = []; // for heartbeat dedup fingerprint
 
     let improvementReport: string | null = null;
+    const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
     try {
-      const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
-
-      // Clean up orphaned tmp file from previous crash (renameSync failure or process crash)
-      const tmpPath = improvementPath + '.tmp';
-      try {
-        const tmpStat = fs.statSync(tmpPath);
-        // Remove if older than 1 minute (not from an in-progress write)
-        if (Date.now() - tmpStat.mtimeMs > 60_000) {
-          fs.unlinkSync(tmpPath);
-          console.log('[heartbeat] Cleaned up orphaned improvement.json.tmp');
-        }
-      } catch {
-        // No tmp file — normal scenario
-      }
-
-      // Guard: after tmp cleanup, the original file may not exist (atomicWriteSync failure scenario)
-      if (!fs.existsSync(improvementPath)) {
-        // File absent — treat as empty state, skip improvement report
-        throw Object.assign(new Error('File not found after tmp cleanup'), { code: 'ENOENT' });
-      }
-
-      const raw = fs.readFileSync(improvementPath, 'utf-8');
-      if (!raw.trim()) throw Object.assign(new Error('Empty file'), { code: 'EMPTY' });
-      let data: any;
-      try {
-        data = JSON.parse(raw);
-      } catch (parseErr) {
-        console.warn(`[heartbeat] Corrupted improvement.json, recreating: ${parseErr}`);
-        const emptyData = JSON.stringify({ issues: [] }, null, 2);
+      await withFileLock(improvementPath, () => {
+        // Clean up orphaned tmp file from previous crash (renameSync failure or process crash)
+        const tmpPath = improvementPath + '.tmp';
         try {
-          atomicWriteSync(improvementPath, emptyData);
-        } catch (writeErr) {
-          console.error(`[heartbeat] atomicWriteSync failed for ${improvementPath}: ${writeErr instanceof Error ? writeErr.message : writeErr}`);
-          // atomicWriteSync failure may leave orphaned .tmp — will be cleaned next cycle
+          const tmpStat = fs.statSync(tmpPath);
+          // Remove if older than 1 minute (not from an in-progress write)
+          if (Date.now() - tmpStat.mtimeMs > 60_000) {
+            fs.unlinkSync(tmpPath);
+            console.log('[heartbeat] Cleaned up orphaned improvement.json.tmp');
+          }
+        } catch {
+          // No tmp file — normal scenario
+        }
+
+        // Guard: after tmp cleanup, the original file may not exist (atomicWriteSync failure scenario)
+        if (!fs.existsSync(improvementPath)) {
+          // File absent — treat as empty state, skip improvement report
+          throw Object.assign(new Error('File not found after tmp cleanup'), { code: 'ENOENT' });
+        }
+
+        const raw = fs.readFileSync(improvementPath, 'utf-8');
+        if (!raw.trim()) throw Object.assign(new Error('Empty file'), { code: 'EMPTY' });
+        let data: any;
+        try {
+          data = JSON.parse(raw);
+        } catch (parseErr) {
+          console.warn(`[heartbeat] Corrupted improvement.json, recreating: ${parseErr}`);
+          const emptyData = JSON.stringify({ issues: [] }, null, 2);
+          try {
+            atomicWriteSync(improvementPath, emptyData);
+          } catch (writeErr) {
+            console.error(`[heartbeat] atomicWriteSync failed for ${improvementPath}: ${writeErr instanceof Error ? writeErr.message : writeErr}`);
+            // atomicWriteSync failure may leave orphaned .tmp — will be cleaned next cycle
+            data = { issues: [] };
+          }
           data = { issues: [] };
         }
-        data = { issues: [] };
-      }
-      const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
-      const high = issues.filter(i => i.severity === 'high');
-      const medium = issues.filter(i => i.severity === 'medium');
-      const low = issues.filter(i => i.severity === 'low');
+        const issues: { file: string; repo: string; type: string; severity: string; description: string }[] = data.issues ?? [];
+        const high = issues.filter(i => i.severity === 'high');
+        const medium = issues.filter(i => i.severity === 'medium');
+        const low = issues.filter(i => i.severity === 'low');
 
-      if (issues.length > 0) {
-        const lines: string[] = [];
-        lines.push(`총 ${issues.length}건 (high: ${high.length}, medium: ${medium.length}, low: ${low.length})`);
-        if (high.length > 0) {
-          lines.push('--- high ---');
-          for (const i of high) {
-            lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
-            highIssueKeys.push(`${i.repo}/${i.file}:${i.type}`);
+        if (issues.length > 0) {
+          const lines: string[] = [];
+          lines.push(`총 ${issues.length}건 (high: ${high.length}, medium: ${medium.length}, low: ${low.length})`);
+          if (high.length > 0) {
+            lines.push('--- high ---');
+            for (const i of high) {
+              lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+              highIssueKeys.push(`${i.repo}/${i.file}:${i.type}`);
+            }
           }
-        }
-        if (medium.length > 0) {
-          lines.push('--- medium ---');
-          for (const i of medium) {
-            lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+          if (medium.length > 0) {
+            lines.push('--- medium ---');
+            for (const i of medium) {
+              lines.push(`- [${i.type}] ${i.repo}/${i.file}: ${i.description}`);
+            }
           }
+          if (low.length > 0) {
+            lines.push(`--- low ${low.length}건 (정기 리뷰 대상) ---`);
+          }
+          improvementReport = lines.join('\n');
         }
-        if (low.length > 0) {
-          lines.push(`--- low ${low.length}건 (정기 리뷰 대상) ---`);
-        }
-        improvementReport = lines.join('\n');
-      }
+      });
     } catch (err: unknown) {
       // ENOENT / EMPTY is expected — improvement.json may not exist yet or be empty
       const isExpected = err instanceof Error && (
@@ -507,12 +508,13 @@ async function leaderHeartbeat(
     // The improvement-scanner will write fresh issues on its next scan cycle.
     if (improvementReport) {
       try {
-        const improvementPath = path.resolve(ws, '.mococo/inbox/improvement.json');
-        const raw = fs.readFileSync(improvementPath, 'utf-8');
-        const data = JSON.parse(raw);
-        data.issues = [];
-        atomicWriteSync(improvementPath, JSON.stringify(data, null, 2));
-        console.log('[heartbeat] Cleared improvement.json issues after leader invoke');
+        await withFileLock(improvementPath, () => {
+          const raw = fs.readFileSync(improvementPath, 'utf-8');
+          const data = JSON.parse(raw);
+          data.issues = [];
+          atomicWriteSync(improvementPath, JSON.stringify(data, null, 2));
+          console.log('[heartbeat] Cleared improvement.json issues after leader invoke');
+        });
       } catch {
         // File may not exist or be malformed — ignore
       }
