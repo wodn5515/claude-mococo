@@ -35,6 +35,16 @@ async function main() {
   console.log(`claude-mococo running — ${teamsWithTokens.length}/${teamCount} teams online (engines: ${engines.join(', ')})`);
 }
 
+// Global error handlers (#99)
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  process.exit(1);
+});
+
 main().catch((err) => {
   console.error('Failed to start:', err);
   process.exit(1);
