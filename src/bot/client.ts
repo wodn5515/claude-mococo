@@ -14,12 +14,13 @@ import { ledger } from '../teams/dispatch-ledger.js';
 import { hookEvents } from '../server/hook-receiver.js';
 import { processDiscordCommands, stripMemoryBlocks, ResourceRegistry } from './discord-commands.js';
 import { appendToInbox, clearInbox } from './inbox-writer.js';
-import { startInboxCompactor } from './inbox-compactor.js';
+import { startInboxCompactor, markDirectInvoke } from './inbox-compactor.js';
 import { updateStress, detectPositiveFeedback, shouldSendLevel3Alert, markLevel3AlertSent } from './stress-tracker.js';
 import { startMemoryConsolidator, checkSizeBasedConsolidation } from './memory-consolidator.js';
 import { startImprovementScanner } from './improvement-scanner.js';
 import { writeEpisode } from './episode-writer.js';
 import { verifyPRStatuses } from '../utils/github-status.js';
+import { initTaskPersistence } from './heartbeat-tasks.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -520,6 +521,10 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
           }
 
           const targetTeams = routeMessage(content, true, config);
+          // Signal direct invoke to suppress inbox watcher's redundant invocation (#48)
+          if (targetTeams.some(t => t.isLeader)) {
+            markDirectInvoke();
+          }
           const chain = newChain();
           for (const target of targetTeams) {
             handleTeamInvocation(target, humanMsg, msg.channelId, config, env, chain);
@@ -557,6 +562,9 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       teamClients.delete(team.id);
     }
   }
+
+  // Restore persisted runtime tasks before starting background tasks
+  initTaskPersistence(config.workspacePath);
 
   // Start periodic background tasks
   startInboxCompactor(config, env, handleTeamInvocation);

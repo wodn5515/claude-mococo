@@ -209,6 +209,31 @@ const HEARTBEAT_DEDUP_WINDOW_MS = 60 * 60_000; // 1 hour suppression window
 let lastHeartbeatFingerprint: string | null = null;
 let lastHeartbeatInvokeAt = 0;
 
+// ---------------------------------------------------------------------------
+// Direct-invoke suppression — prevent inbox watcher from re-invoking the leader
+// when a direct invocation was already triggered by messageCreate (#48).
+// ---------------------------------------------------------------------------
+
+let directInvokeAt = 0;
+const DIRECT_INVOKE_SUPPRESSION_MS = 5_000; // suppress inbox watcher for 5s after direct invoke
+
+/**
+ * Signal that the leader was directly invoked from messageCreate.
+ * The inbox watcher should skip its next invocation within the suppression window,
+ * since the direct invocation already includes the inbox content.
+ */
+export function markDirectInvoke(): void {
+  directInvokeAt = Date.now();
+}
+
+/**
+ * Check whether the inbox watcher should suppress its invocation because
+ * a direct invoke already occurred recently.
+ */
+function isDirectInvokeSuppressed(): boolean {
+  return directInvokeAt > 0 && Date.now() - directInvokeAt < DIRECT_INVOKE_SUPPRESSION_MS;
+}
+
 /**
  * Determine whether a heartbeat invocation should be suppressed (deduped).
  * Scheduled heartbeat tasks (periodic/daily/weekly/hourly) bypass dedup —
@@ -497,6 +522,8 @@ async function leaderHeartbeat(
       mentions: [leaderTeam.id],
     };
     addMessage(channelId, systemMsg);
+    // Suppress inbox watcher to prevent dual processing with heartbeat (#48)
+    directInvokeAt = Date.now();
     triggerInvocation(leaderTeam, systemMsg, channelId, config, env, newChain());
     // Update heartbeat dedup state
     lastHeartbeatFingerprint = heartbeatFp;
@@ -774,6 +801,7 @@ export function stopInboxCompactor(): void {
   // 상태 초기화 — 재시작 시 이전 fingerprint로 dedup 오작동 방지
   lastHeartbeatFingerprint = null;
   lastHeartbeatInvokeAt = 0;
+  directInvokeAt = 0;
   heartbeatRunning = false;
   heartbeatStartedAt = 0;
   pendingTaskCooldowns.clear();
@@ -842,6 +870,12 @@ export function startInboxCompactor(
 
   // fs.watch for immediate inbox change detection — A안: bypass haiku triage
   const immediateLeaderInvoke = async () => {
+    // Suppress if a direct invocation from messageCreate already handled this (#48)
+    if (isDirectInvokeSuppressed()) {
+      console.log('[inbox-compactor] Suppressed: direct invoke already in progress (dual-processing guard)');
+      return;
+    }
+
     if (isOccupied(leaderTeam.id)) {
       console.log('[inbox-compactor] Leader busy/queued, queueing inbox invoke');
       pendingInboxInvoke = true;
