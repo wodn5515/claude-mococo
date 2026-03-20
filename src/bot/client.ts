@@ -682,6 +682,11 @@ async function handleAdminCommand(
   msg: Message,
   config: TeamsConfig,
 ): Promise<boolean> {
+  // Permission check: humanDiscordId only (#96)
+  if (config.humanDiscordId && msg.author.id !== config.humanDiscordId) {
+    return false;
+  }
+
   if (content === '!status') {
     const status = getStatus();
     const lines = Object.entries(config.teams).map(([id, t]) => {
