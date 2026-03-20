@@ -21,6 +21,22 @@ function isOccupied(teamId: string): boolean {
 
 const PENDING_TASK_INTERVAL_MS = 60_000;
 const DEBOUNCE_MS = 2_000;
+const MAX_FILE_READ_BYTES = 1024 * 1024; // 1MB - skip files larger than this to prevent memory issues
+
+/** Safe file read with size limit. Returns empty string if file exceeds MAX_FILE_READ_BYTES. */
+function safeReadFileSync(filePath: string, encoding: BufferEncoding = 'utf-8'): string {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > MAX_FILE_READ_BYTES) {
+      console.warn(`[inbox-compactor] File too large, skipping (${stat.size} bytes): ${filePath}`);
+      return '';
+    }
+    return fs.readFileSync(filePath, encoding);
+  } catch {
+    return '';
+  }
+}
+
 const HEARTBEAT_MS = 3 * 60_000;        // 3 minutes
 const FOLLOW_UP_MS = 2 * 60_000;         // 2 minutes
 const DAILY_DIGEST_MS = 24 * 60 * 60_000; // 24 hours
@@ -46,8 +62,8 @@ interface HeartbeatState {
 
 export function parseHeartbeatMd(ws: string): HeartbeatTask[] {
   const heartbeatPath = path.resolve(ws, 'heartbeat.md');
-  let content: string;
-  try { content = fs.readFileSync(heartbeatPath, 'utf-8'); } catch { return []; }
+  const content = safeReadFileSync(heartbeatPath);
+  if (!content) return [];
 
   const tasks: HeartbeatTask[] = [];
   let currentSection: HeartbeatTask['section'] | null = null;
@@ -346,8 +362,7 @@ async function leaderHeartbeat(
     const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
 
     // Gather context
-    let inbox = '';
-    try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
+    let inbox = safeReadFileSync(inboxPath).trim();
 
     const unresolved = ledger.getUnresolved(5 * 60_000); // 5min+
     const highIssueKeys: string[] = []; // for heartbeat dedup fingerprint
@@ -721,13 +736,7 @@ async function pendingTaskLoop(
     }
 
     const shortTermPath = path.resolve(ws, '.mococo/memory', team.id, 'short-term.md');
-    let shortTerm: string;
-    try {
-      shortTerm = fs.readFileSync(shortTermPath, 'utf-8').trim();
-    } catch {
-      continue;
-    }
-
+    const shortTerm = safeReadFileSync(shortTermPath).trim();
     if (!shortTerm) continue;
 
     const pendingTasks = findPendingTasks(shortTerm);
@@ -756,7 +765,8 @@ async function pendingTaskLoop(
 // Timer management for graceful shutdown
 // ---------------------------------------------------------------------------
 
-const activeTimers: ReturnType<typeof setInterval>[] = [];
+const activeIntervals: ReturnType<typeof setInterval>[] = [];
+const activeTimeouts: ReturnType<typeof setTimeout>[] = [];
 let inboxWatcher: fs.FSWatcher | null = null;
 let inboxDebounceTimer: NodeJS.Timeout | null = null;
 
@@ -769,10 +779,14 @@ export function stopInboxCompactor(): void {
     clearTimeout(inboxDebounceTimer);
     inboxDebounceTimer = null;
   }
-  for (const timer of activeTimers) {
+  for (const timer of activeIntervals) {
     clearInterval(timer);
   }
-  activeTimers.length = 0;
+  activeIntervals.length = 0;
+  for (const timer of activeTimeouts) {
+    clearTimeout(timer);
+  }
+  activeTimeouts.length = 0;
   // 상태 초기화 — 재시작 시 이전 fingerprint로 dedup 오작동 방지
   lastHeartbeatFingerprint = null;
   lastHeartbeatInvokeAt = 0;
@@ -794,7 +808,7 @@ export function startInboxCompactor(
   triggerInvocation: InvocationHandler,
 ): void {
   // Guard against double-start — clean up existing timers first
-  if (activeTimers.length > 0) {
+  if (activeIntervals.length > 0 || activeTimeouts.length > 0) {
     console.warn('[inbox-compactor] Already running — stopping existing instance before restart');
     stopInboxCompactor();
   }
@@ -852,8 +866,7 @@ export function startInboxCompactor(
 
     pendingInboxInvoke = false;
     const inboxPath = path.resolve(ws, '.mococo/inbox', `${leaderTeam.id}.md`);
-    let inbox = '';
-    try { inbox = fs.readFileSync(inboxPath, 'utf-8').trim(); } catch {}
+    let inbox = safeReadFileSync(inboxPath).trim();
     if (!inbox) return;
 
     console.log('[inbox-compactor] Inbox changed → immediate leader invoke (no triage)');
@@ -892,10 +905,10 @@ export function startInboxCompactor(
   }
 
   // Leader heartbeat: periodic check every 3 minutes
-  activeTimers.push(setInterval(executeHeartbeat, HEARTBEAT_MS));
+  activeIntervals.push(setInterval(executeHeartbeat, HEARTBEAT_MS));
 
   // Queue drain: retry pending inbox invoke every 15 seconds when leader was busy
-  activeTimers.push(setInterval(() => {
+  activeIntervals.push(setInterval(() => {
     if (!pendingInboxInvoke) return;
     immediateLeaderInvoke().catch(err => {
       console.error(`[inbox-compactor] Queue drain error: ${err}`);
@@ -903,28 +916,28 @@ export function startInboxCompactor(
   }, 15_000));
 
   // Follow-up loop: check dispatch ledger every 2 minutes
-  activeTimers.push(setInterval(() => {
+  activeIntervals.push(setInterval(() => {
     followUpLoop(config, env, triggerInvocation).catch(err => {
       console.error(`[follow-up] Unhandled error: ${err}`);
     });
   }, FOLLOW_UP_MS));
 
   // Pending task loop: every 60 seconds
-  activeTimers.push(setInterval(() => {
+  activeIntervals.push(setInterval(() => {
     pendingTaskLoop(config, env, triggerInvocation).catch(err => {
       console.error(`[pending-task] Unhandled error: ${err}`);
     });
   }, PENDING_TASK_INTERVAL_MS));
 
   // Cooldown cleanup: purge expired entries every 10 minutes
-  activeTimers.push(setInterval(purgeExpiredCooldowns, 10 * 60_000));
+  activeIntervals.push(setInterval(purgeExpiredCooldowns, 10 * 60_000));
 
   // Daily digest: every 24 hours (first run after 1 hour)
-  activeTimers.push(setTimeout(() => {
+  activeTimeouts.push(setTimeout(() => {
     dailyDigest(config, env, triggerInvocation).catch(err => {
       console.error(`[daily-digest] Unhandled error: ${err}`);
     });
-    activeTimers.push(setInterval(() => {
+    activeIntervals.push(setInterval(() => {
       dailyDigest(config, env, triggerInvocation).catch(err => {
         console.error(`[daily-digest] Unhandled error: ${err}`);
       });

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 const MAX_STDOUT_SIZE = 5 * 1024 * 1024; // 5MB limit
+const MAX_STDERR_BYTES = 4096;
 
 /**
  * Run a prompt through claude CLI with haiku model (single turn).
@@ -32,7 +33,12 @@ export function runHaiku(prompt: string): Promise<string> {
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      if (stderr.length < MAX_STDERR_BYTES) {
+        stderr += chunk.toString();
+        if (stderr.length > MAX_STDERR_BYTES) {
+          stderr = stderr.slice(0, MAX_STDERR_BYTES);
+        }
+      }
     });
 
     child.on('error', (err) => reject(err));
