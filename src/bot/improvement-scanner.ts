@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runHaiku } from '../utils/haiku.js';
+import { withFileLock } from '../utils/fs.js';
 import type { TeamsConfig, TeamConfig } from '../types.js';
 
 const SCAN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -376,14 +377,16 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
   let existingIssues: PersistedIssue[] = [];
   let dismissedKeys: string[] = [];
   try {
-    const raw = fs.readFileSync(outputPath, 'utf-8');
-    const data = JSON.parse(raw) as { issues?: PersistedIssue[]; dismissedKeys?: string[] };
-    if (data.issues && Array.isArray(data.issues)) {
-      existingIssues = data.issues;
-    }
-    if (data.dismissedKeys && Array.isArray(data.dismissedKeys)) {
-      dismissedKeys = data.dismissedKeys;
-    }
+    await withFileLock(outputPath, () => {
+      const raw = fs.readFileSync(outputPath, 'utf-8');
+      const data = JSON.parse(raw) as { issues?: PersistedIssue[]; dismissedKeys?: string[] };
+      if (data.issues && Array.isArray(data.issues)) {
+        existingIssues = data.issues;
+      }
+      if (data.dismissedKeys && Array.isArray(data.dismissedKeys)) {
+        dismissedKeys = data.dismissedKeys;
+      }
+    });
   } catch {
     // No existing file or parse error — start fresh
   }
@@ -493,15 +496,20 @@ async function improvementLoop(config: TeamsConfig): Promise<void> {
     ...(dismissedKeys.length > 0 ? { dismissedKeys } : {}),
   };
 
-  // Atomic write: write to temp file then rename to prevent data corruption
-  const tmpPath = `${outputPath}.tmp`;
+  // Atomic write with file lock to prevent race with inbox-compactor
   try {
-    fs.writeFileSync(tmpPath, JSON.stringify(result, null, 2));
-    fs.renameSync(tmpPath, outputPath);
+    await withFileLock(outputPath, () => {
+      const tmpPath = `${outputPath}.tmp`;
+      try {
+        fs.writeFileSync(tmpPath, JSON.stringify(result, null, 2));
+        fs.renameSync(tmpPath, outputPath);
+      } catch (err) {
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+        throw err;
+      }
+    });
   } catch (err) {
     console.error(`[improvement-scanner] Failed to write improvement.json: ${err}`);
-    // Clean up temp file if rename failed
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
     return;
   }
   const newCount = newlyDetected.filter(i => !existingByKey.has(issueKey(i))).length;
