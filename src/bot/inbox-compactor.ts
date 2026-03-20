@@ -7,7 +7,7 @@ import { ledger } from '../teams/dispatch-ledger.js';
 import { addMessage } from '../teams/context.js';
 import { newChain } from './client.js';
 import { toHeartbeatTasks } from './heartbeat-tasks.js';
-import { decayAll } from './stress-tracker.js';
+import { decayAll, decayStress } from './stress-tracker.js';
 import type { TeamsConfig, TeamConfig, EnvConfig, ConversationMessage, ChainContext } from '../types.js';
 
 /** Check if a team is currently busy or queued (not available for new work). */
