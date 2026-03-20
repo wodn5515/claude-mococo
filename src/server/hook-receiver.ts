@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { HookEvent } from '../types.js';
 
@@ -28,7 +29,10 @@ export function startHookServer(port: number) {
     const hookSecret = process.env.HOOK_SECRET;
     if (hookSecret) {
       const auth = req.headers.authorization;
-      if (!auth || auth !== `Bearer ${hookSecret}`) {
+      const expected = Buffer.from(`Bearer ${hookSecret}`);
+      const actual = Buffer.from(auth ?? '');
+      if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+        console.warn('[hook-receiver] Unauthorized request');
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end('{"error":"unauthorized"}');
         return;
