@@ -78,9 +78,26 @@ function withTeamLock(teamId: string, fn: () => Promise<void>): Promise<void> {
   // Chain fn after previous — runs regardless of whether prev resolved or rejected.
   // Never delete from map: entries are bounded by team count, and keeping the
   // resolved promise ensures new callers always chain correctly (fixes #51).
-  const next = prev.then(fn, fn);
+  //
+  // The inner wrapper uses try/finally to guarantee the lock-chain promise always
+  // resolves, even if fn throws. This prevents a rejected stored promise from
+  // causing unhandled-rejection warnings and memory leaks (fixes #80).
+  // The error is still propagated to the caller via savedError.
+  const next = prev.then(runGuarded, runGuarded);
+  let savedError: unknown;
+
+  async function runGuarded(): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      savedError = err;
+    }
+  }
+
   teamLocks.set(teamId, next);
-  return next;
+  return next.then(() => {
+    if (savedError !== undefined) throw savedError;
+  });
 }
 
 async function consolidateTeam(teamId: string, teamName: string, config: TeamsConfig): Promise<void> {
