@@ -45,11 +45,78 @@ export function startHookServer(port: number) {
     req.on('end', () => {
       if (aborted) return;
       try {
-        const event: HookEvent = JSON.parse(body);
+        const parsed: unknown = JSON.parse(body);
+
+        // Validate parsed data is a non-null object
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          console.warn('[hook-receiver] Invalid payload: expected a JSON object');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"payload must be a JSON object"}');
+          return;
+        }
+
+        const obj = parsed as Record<string, unknown>;
+
+        // Validate required fields exist and have correct types
+        if (typeof obj.hook_event_name !== 'string' || obj.hook_event_name.length === 0) {
+          console.warn('[hook-receiver] Invalid payload: missing or invalid hook_event_name');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"hook_event_name must be a non-empty string"}');
+          return;
+        }
+
+        if (typeof obj.session_id !== 'string' || obj.session_id.length === 0) {
+          console.warn('[hook-receiver] Invalid payload: missing or invalid session_id');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"session_id must be a non-empty string"}');
+          return;
+        }
+
+        // Validate optional fields have correct types when present
+        if (obj.mococo_team !== undefined && typeof obj.mococo_team !== 'string') {
+          console.warn('[hook-receiver] Invalid payload: mococo_team must be a string');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"mococo_team must be a string"}');
+          return;
+        }
+
+        if (obj.teammate_name !== undefined && typeof obj.teammate_name !== 'string') {
+          console.warn('[hook-receiver] Invalid payload: teammate_name must be a string');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"teammate_name must be a string"}');
+          return;
+        }
+
+        if (obj.task_subject !== undefined && typeof obj.task_subject !== 'string') {
+          console.warn('[hook-receiver] Invalid payload: task_subject must be a string');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"task_subject must be a string"}');
+          return;
+        }
+
+        if (obj.tool_name !== undefined && typeof obj.tool_name !== 'string') {
+          console.warn('[hook-receiver] Invalid payload: tool_name must be a string');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"tool_name must be a string"}');
+          return;
+        }
+
+        if (obj.tool_input !== undefined &&
+            (typeof obj.tool_input !== 'object' || obj.tool_input === null || Array.isArray(obj.tool_input))) {
+          console.warn('[hook-receiver] Invalid payload: tool_input must be an object');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"ok":false,"error":"tool_input must be an object"}');
+          return;
+        }
+
+        const event = obj as HookEvent;
         hookEvents.emit('any', event);
         hookEvents.emit(event.hook_event_name, event);
       } catch {
-        // invalid JSON, ignore
+        console.warn('[hook-receiver] Failed to parse JSON body');
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end('{"ok":false,"error":"invalid JSON"}');
+        return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
