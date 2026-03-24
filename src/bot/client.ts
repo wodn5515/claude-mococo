@@ -377,7 +377,46 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
             );
           }
 
-          const commands = [resetCmd.toJSON()];
+          const statusCmd = new SlashCommandBuilder()
+            .setName('status')
+            .setDescription('팀별 현재 상태 조회');
+
+          const teamsCmd = new SlashCommandBuilder()
+            .setName('teams')
+            .setDescription('팀 구성 및 엔진 정보 조회');
+
+          const reposCmd = new SlashCommandBuilder()
+            .setName('repos')
+            .setDescription('연결된 레포지토리 목록 조회');
+
+          const dashboardCmd = new SlashCommandBuilder()
+            .setName('dashboard')
+            .setDescription('팀 작업 분배 및 진행률 대시보드');
+
+          const historyCmd = new SlashCommandBuilder()
+            .setName('history')
+            .setDescription('에이전트 작업 이력 조회')
+            .addStringOption(opt =>
+              opt.setName('agent')
+                .setDescription('에이전트 ID 또는 이름 (미지정 시 리더)')
+                .setRequired(false),
+            )
+            .addIntegerOption(opt =>
+              opt.setName('count')
+                .setDescription('조회할 항목 수 (기본 10)')
+                .setRequired(false)
+                .setMinValue(1)
+                .setMaxValue(50),
+            );
+
+          const commands = [
+            resetCmd.toJSON(),
+            statusCmd.toJSON(),
+            teamsCmd.toJSON(),
+            reposCmd.toJSON(),
+            dashboardCmd.toJSON(),
+            historyCmd.toJSON(),
+          ];
 
           const rest = new REST().setToken(team.discordToken);
           const guildId = client.guilds.cache.first()?.id;
@@ -397,41 +436,88 @@ export async function createBots(config: TeamsConfig, env: EnvConfig): Promise<v
       }
     });
 
-    // Handle /reset slash command interaction
+    // Handle slash command interactions
     client.on('interactionCreate', async (interaction) => {
       try {
         if (!interaction.isChatInputCommand()) return;
-        if (interaction.commandName !== 'reset') return;
 
-        // Permission check: humanDiscordId only
+        // Permission check: humanDiscordId only (all admin commands)
         if (config.humanDiscordId && interaction.user.id !== config.humanDiscordId) {
-          await interaction.reply({ content: '메모리 초기화는 회장님만 실행할 수 있습니다.', ephemeral: true });
+          await interaction.reply({ content: '이 명령어는 회장님만 실행할 수 있습니다.', ephemeral: true });
           return;
         }
 
-        if (team.isLeader) {
-          const target = interaction.options.getString('team') ?? 'all';
+        if (interaction.commandName === 'reset') {
+          if (team.isLeader) {
+            const target = interaction.options.getString('team') ?? 'all';
 
-          if (target === 'all') {
-            const results: string[] = [];
-            for (const t of Object.values(config.teams)) {
+            if (target === 'all') {
+              const results: string[] = [];
+              for (const t of Object.values(config.teams)) {
+                const cleared = resetTeamMemory(t.id, config.workspacePath);
+                results.push(`**${t.name}**: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(비어있음)'}`);
+              }
+              await interaction.reply(`전체 팀 메모리 초기화 완료:\n${results.join('\n')}`);
+            } else {
+              const t = config.teams[target];
+              if (!t) {
+                await interaction.reply({ content: `팀을 찾을 수 없습니다: ${target}`, ephemeral: true });
+                return;
+              }
               const cleared = resetTeamMemory(t.id, config.workspacePath);
-              results.push(`**${t.name}**: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(비어있음)'}`);
+              await interaction.reply(`**${t.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
             }
-            await interaction.reply(`전체 팀 메모리 초기화 완료:\n${results.join('\n')}`);
           } else {
-            const t = config.teams[target];
-            if (!t) {
-              await interaction.reply({ content: `팀을 찾을 수 없습니다: ${target}`, ephemeral: true });
-              return;
-            }
-            const cleared = resetTeamMemory(t.id, config.workspacePath);
-            await interaction.reply(`**${t.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+            const cleared = resetTeamMemory(team.id, config.workspacePath);
+            await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
           }
-        } else {
-          // Non-leader: reset own memory
-          const cleared = resetTeamMemory(team.id, config.workspacePath);
-          await interaction.reply(`**${team.name}** 메모리 초기화 완료: ${cleared.length > 0 ? cleared.join(', ') + ' 삭제' : '(이미 비어있음)'}`);
+          return;
+        }
+
+        if (interaction.commandName === 'status') {
+          const status = getStatus();
+          const lines = Object.entries(config.teams).map(([id, t]) => {
+            const s = status[id];
+            const online = teamClients.has(t.id) ? 'online' : 'no token';
+            return `- **${t.name}** [${t.engine}] (${online}): ${s?.busy ? `working (${s.task})` : 'idle'}`;
+          });
+          await interaction.reply(lines.join('\n') || 'All teams idle.');
+          return;
+        }
+
+        if (interaction.commandName === 'teams') {
+          const lines = Object.values(config.teams)
+            .map(t => {
+              const online = teamClients.has(t.id) ? 'online' : 'offline';
+              return `- **${t.name}** [${t.engine}/${t.model}] (${online}) ${t.isLeader ? '— leader' : ''}`;
+            })
+            .join('\n');
+          await interaction.reply(lines);
+          return;
+        }
+
+        if (interaction.commandName === 'repos') {
+          let repos: string[] = [];
+          try {
+            repos = fs.readdirSync(path.resolve(config.workspacePath, 'repos')).filter(f => f !== '.gitkeep');
+          } catch {}
+          await interaction.reply(repos.map(r => `- **${r}**`).join('\n') || 'No repos linked.');
+          return;
+        }
+
+        if (interaction.commandName === 'dashboard') {
+          await interaction.deferReply();
+          await handleDashboardCommand(interaction, config);
+          saveTaskMetrics(config);
+          return;
+        }
+
+        if (interaction.commandName === 'history') {
+          const agentArg = interaction.options.getString('agent') ?? undefined;
+          const countArg = interaction.options.getInteger('count') ?? undefined;
+          const embeds = buildHistoryEmbeds(config, agentArg, countArg);
+          await interaction.reply({ embeds });
+          return;
         }
       } catch (err) {
         console.error(`[${team.name}] interactionCreate error:`, err);
@@ -705,60 +791,12 @@ function resetTeamMemory(teamId: string, workspacePath: string): string[] {
 
 async function handleAdminCommand(
   content: string,
-  msg: Message,
-  config: TeamsConfig,
+  _msg: Message,
+  _config: TeamsConfig,
 ): Promise<boolean> {
-  // Permission check: humanDiscordId only (#96)
-  if (config.humanDiscordId && msg.author.id !== config.humanDiscordId) {
-    return false;
-  }
-
-  if (content === '!status') {
-    const status = getStatus();
-    const lines = Object.entries(config.teams).map(([id, t]) => {
-      const s = status[id];
-      const online = teamClients.has(t.id) ? 'online' : 'no token';
-      return `- **${t.name}** [${t.engine}] (${online}): ${s?.busy ? `working (${s.task})` : 'idle'}`;
-    });
-    await msg.reply(lines.join('\n') || 'All teams idle.');
-    return true;
-  }
-
-  if (content === '!teams') {
-    const lines = Object.values(config.teams)
-      .map(t => {
-        const online = teamClients.has(t.id) ? 'online' : 'offline';
-        return `- **${t.name}** [${t.engine}/${t.model}] (${online}) ${t.isLeader ? '— leader' : ''}`;
-      })
-      .join('\n');
-    await msg.reply(lines);
-    return true;
-  }
-
-  if (content === '!repos') {
-    let repos: string[] = [];
-    try {
-      repos = fs.readdirSync(path.resolve(config.workspacePath, 'repos')).filter(f => f !== '.gitkeep');
-    } catch {}
-    await msg.reply(repos.map(r => `- **${r}**`).join('\n') || 'No repos linked.');
-    return true;
-  }
-
-  if (content === '!dashboard') {
-    await handleDashboardCommand(msg, config);
-    saveTaskMetrics(config);
-    return true;
-  }
-
-  if (content.startsWith('!history')) {
-    const parts = content.split(/\s+/);
-    const agentArg = parts[1] ?? undefined;
-    const countArg = parts[2] ? parseInt(parts[2], 10) : undefined;
-    const embeds = buildHistoryEmbeds(config, agentArg, countArg);
-    await msg.reply({ embeds });
-    return true;
-  }
-
+  // All admin commands migrated to slash commands (/status, /teams, /repos, /dashboard, /history)
+  // This function is kept for backward compatibility but no longer handles any commands.
+  void content;
   return false;
 }
 

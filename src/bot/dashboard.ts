@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { EmbedBuilder, type Message } from 'discord.js';
+import { EmbedBuilder, type Message, type ChatInputCommandInteraction } from 'discord.js';
 import { getStatus } from '../teams/concurrency.js';
 import { ledger } from '../teams/dispatch-ledger.js';
 import { loadStressState, type StressState } from './stress-tracker.js';
@@ -217,12 +217,16 @@ function buildDashboardEmbeds(data: DashboardData): EmbedBuilder[] {
 // ---------------------------------------------------------------------------
 
 export async function handleDashboardCommand(
-  msg: Message,
+  msg: Message | ChatInputCommandInteraction,
   config: TeamsConfig,
 ): Promise<void> {
   const data = collectDashboardData(config);
   const embeds = buildDashboardEmbeds(data);
-  await msg.reply({ embeds });
+  if ('deferred' in msg && msg.deferred) {
+    await (msg as ChatInputCommandInteraction).editReply({ embeds });
+  } else {
+    await msg.reply({ embeds });
+  }
 }
 
 // ---------------------------------------------------------------------------
