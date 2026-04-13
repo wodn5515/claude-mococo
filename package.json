@@ -1,6 +1,6 @@
 {
   "name": "claude-mococo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI Bot Adoption Center on Discord — independent bots working directly in real repositories",
   "type": "module",
   "license": "MIT",
