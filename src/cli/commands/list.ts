@@ -1,24 +1,26 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { requireWorkspace } from '../workspace.js';
+import { listBotIds, loadBotConfig } from '../../config.js';
 
 export async function runList(): Promise<void> {
-  const ws = requireWorkspace();
-  const raw = JSON.parse(fs.readFileSync(path.join(ws, 'teams.json'), 'utf-8'));
-  const teams = raw.teams as Record<string, any>;
+  const botIds = listBotIds();
 
-  const ids = Object.keys(teams);
-  if (ids.length === 0) {
-    console.log('No assistants configured. Run `mococo add` to add one.');
+  if (botIds.length === 0) {
+    console.log('No bots adopted yet. Run "mococo adopt <id>" to get started.');
     return;
   }
 
-  console.log(`\n  ${'ID'.padEnd(16)} ${'Name'.padEnd(16)} ${'Engine'.padEnd(10)} ${'Model'.padEnd(18)} Leader`);
-  console.log(`  ${'─'.repeat(16)} ${'─'.repeat(16)} ${'─'.repeat(10)} ${'─'.repeat(18)} ──────`);
-
-  for (const [id, cfg] of Object.entries(teams) as [string, any][]) {
-    const leader = cfg.isLeader ? 'yes' : '';
-    console.log(`  ${id.padEnd(16)} ${(cfg.name ?? id).padEnd(16)} ${(cfg.engine ?? 'claude').padEnd(10)} ${(cfg.model ?? 'sonnet').padEnd(18)} ${leader}`);
+  console.log('Adopted bots:\n');
+  for (const id of botIds) {
+    try {
+      const config = loadBotConfig(id);
+      const leader = config.isLeader ? ' (leader)' : '';
+      const dirs = config.allowedDirs.length > 0
+        ? config.allowedDirs.map(d => `    → ${d}`).join('\n')
+        : '    (no directories configured)';
+      console.log(`  ${config.name} [${id}] — ${config.engine}/${config.model}${leader}`);
+      console.log(dirs);
+      console.log();
+    } catch (err) {
+      console.log(`  ${id} — (config error: ${(err as Error).message})`);
+    }
   }
-  console.log();
 }

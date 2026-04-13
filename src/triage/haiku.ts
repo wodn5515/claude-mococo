@@ -5,7 +5,7 @@ const MAX_STDERR_BYTES = 4096;
 
 /**
  * Run a prompt through claude CLI with haiku model (single turn).
- * Shared utility — used by inbox-compactor, memory-consolidator, improvement-scanner.
+ * Used for triage decisions and memory summarization.
  */
 export function runHaiku(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {

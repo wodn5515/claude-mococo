@@ -1,149 +1,117 @@
-export type TeamId = string;
+import os from 'node:os';
+import path from 'node:path';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+export const MOCOCO_HOME = path.join(os.homedir(), '.mococo');
+
+// ---------------------------------------------------------------------------
+// Engine types
+// ---------------------------------------------------------------------------
 
 export type Engine = 'claude' | 'codex' | 'gemini';
 
-export interface McpServerStdioConfig {
-  type?: 'stdio';
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-}
-
-export interface McpServerHttpConfig {
-  type: 'http';
-  url: string;
-  headers?: Record<string, string>;
-}
-
-export type McpServerConfig = McpServerStdioConfig | McpServerHttpConfig;
+// ---------------------------------------------------------------------------
+// Bot config (per-bot, stored in ~/.mococo/bots/<id>/config.json)
+// ---------------------------------------------------------------------------
 
 export interface GitIdentity {
   name: string;
   email: string;
 }
 
-export interface StressProfile {
-  /** Multiplier applied to all stress score deltas. Range: 0.5–2.0. Default: 1.0 */
-  sensitivity: number;
-  modifiers: {
-    level1: string;
-    level2: string;
-    level3: string;
-  };
+export interface ScheduleConfig {
+  cron?: string;                    // Cron expression (e.g. "0 */2 * * *" = every 2h)
+  onIdle?: boolean;                 // Auto-trigger when idle for idleDelayMinutes
+  idleDelayMinutes?: number;        // Minutes of idle before auto-trigger (default: 10)
+  reportChannel?: string;           // Discord channel ID to post scheduled results
 }
 
-export interface TeamConfig {
-  id: TeamId;
-  name: string;
-  color: number;
-  avatar: string;
+export interface BotConfig {
+  id: string;
+  name: string;                     // Display name (e.g. "스택코코")
   engine: Engine;
-  model: string;
-  maxBudget: number;
-  prompt: string;
-  isLeader?: boolean;
-  channels?: string[];   // channel IDs — empty/omitted = all channels
-  discordUserId?: string; // auto-populated on first login
-  useTeams?: boolean;     // enable agent team mode for complex tasks
-  teamRules?: string[];   // rules for how sub-agents are created and behave
-  stressProfile?: StressProfile; // persona modifier based on workload/stress
-  git: GitIdentity;
-  discordToken: string;         // each team has its own Discord bot
-  mcpServers?: Record<string, McpServerConfig>;
+  model: string;                    // e.g. "sonnet", "opus", "o3"
+  color?: string;                   // Hex color for Discord embeds
+  avatar?: string;                  // Avatar URL or built-in key
+  maxBudget: number;                // Max $ per invocation (claude only)
+  discordTokenEnv: string;          // Env var name for Discord token
+  discordUserId?: string;           // Auto-populated on first login
+  isLeader?: boolean;               // Responds to all messages without @mention
+  channels?: string[];              // Restrict to specific channel IDs
+  allowedDirs: string[];            // Directories this bot can access
   permissions: {
     allow?: string[];
     deny?: string[];
   };
+  git: GitIdentity;
+  schedule?: ScheduleConfig;        // Cron/idle auto-trigger settings
 }
 
-export interface TeamsConfig {
-  teams: Record<string, TeamConfig>;
-  globalDeny: string[];
-  conversationWindow: number;
-  workspacePath: string;
+// ---------------------------------------------------------------------------
+// Global config (stored in ~/.mococo/global.json)
+// ---------------------------------------------------------------------------
+
+export interface GlobalConfig {
   humanDiscordId?: string;
-  humanTitle?: string;          // title for the human (e.g. "Boss"), default "Boss"
+  humanTitle?: string;              // How bots address the human (default: "Boss")
+  globalDeny: string[];             // Commands denied across all bots
+  conversationWindow: number;       // Recent Discord messages in context
 }
 
-export interface ConversationMessage {
-  teamId: string | 'human';
-  teamName: string;
-  discordId?: string;
+// ---------------------------------------------------------------------------
+// Triage — Phase 1 decision
+// ---------------------------------------------------------------------------
+
+export interface TriageRepoWork {
+  action: 'repo_work';
+  repo: string;                     // Absolute path to repo
+  repoName: string;                 // Display name
+  task: string;                     // Task description for claude
+}
+
+export interface TriageReply {
+  action: 'reply';
+  message: string;                  // Direct Discord response
+}
+
+export interface TriageIgnore {
+  action: 'ignore';
+}
+
+export type TriageResult = TriageRepoWork | TriageReply | TriageIgnore;
+
+// ---------------------------------------------------------------------------
+// Repo context (loaded from ~/.mococo/repos/<name>/)
+// ---------------------------------------------------------------------------
+
+export interface RepoInfo {
+  name: string;
+  path: string;                     // Absolute path
+  context: string;                  // context.md content
+  worklogSummary: string;           // Recent worklog entries (truncated)
+}
+
+// ---------------------------------------------------------------------------
+// Execution result
+// ---------------------------------------------------------------------------
+
+export interface ExecutionResult {
+  output: string;                   // claude's text output
+  exitCode: number;
+  costUsd?: number;                 // If parseable from output
+}
+
+// ---------------------------------------------------------------------------
+// Discord message (simplified)
+// ---------------------------------------------------------------------------
+
+export interface DiscordMessage {
   content: string;
-  timestamp: Date;
-  mentions: string[];
-}
-
-export interface TeamInvocation {
-  teamId: string;
-  trigger: 'human_message' | 'team_mention' | 'direct_command';
-  message: ConversationMessage;
-  conversation: ConversationMessage[];
+  authorId: string;
+  authorName: string;
   channelId: string;
-}
-
-export interface Episode {
-  ts: number;           // Unix timestamp (ms)
-  teamId: string;
-  channelId: string;
-  trigger: 'human_message' | 'team_mention' | 'system';
-  summary: string;      // Haiku 생성 1-2줄 요약 (Korean, max 200자)
-  mentions: string[];   // 출력에서 언급된 팀 ID들
-}
-
-export interface EnvConfig {
-  workChannelId?: string;
-  hookPort: number;
-  memberTrackingChannelId?: string;
-  decisionLogChannelId?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Chain tracking — prevent infinite bot-to-bot loops
-// ---------------------------------------------------------------------------
-
-export interface ChainContext {
-  chainId: string;
-  totalInvocations: number;
-  maxBudget: number;
-  recentPath: string[];       // last N teamIds in this chain
-}
-
-// ---------------------------------------------------------------------------
-// Dispatch ledger — track dispatched work for follow-up
-// ---------------------------------------------------------------------------
-
-/**
- * Tracks work dispatched between teams for follow-up.
- *
- * Invariants:
- * - `resolvedAt` is meaningful only when `resolved === true`.
- *   When `resolved` is `false`, `resolvedAt` is always `undefined`.
- * - Once `resolved` is set to `true`, it is never reverted to `false`.
- */
-export interface DispatchRecord {
-  id: string;
-  chainId: string;
-  fromTeam: string;
-  toTeam: string;
-  channelId: string;
-  reason: string;
-  dispatchedAt: number;
-  /**
-   * Timestamp (ms) when this record was resolved.
-   * Only meaningful when `resolved === true`; always `undefined` otherwise.
-   */
-  resolvedAt?: number;
-  resolved: boolean;
-}
-
-export interface HookEvent {
-  hook_event_name: string;
-  session_id: string;
-  mococo_team?: string;
-  teammate_name?: string;
-  task_subject?: string;
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  [key: string]: unknown;
+  isBot: boolean;
 }

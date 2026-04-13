@@ -1,6 +1,6 @@
 # claude-mococo — Universal Rules
 
-These rules apply to ALL teams. Every Claude process loads this file.
+These rules apply to ALL bots. Every Claude process loads this file.
 
 ## Absolute Rules
 
@@ -9,54 +9,44 @@ These rules apply to ALL teams. Every Claude process loads this file.
 3. **NEVER delete remote branches** with open PRs.
 4. **NEVER expose secrets** — no .env files, no tokens, no credentials in commits.
 
-## Team Permissions
+## Architecture (v1.0)
 
-- **Leader, Planning, Design:** Read-only. No file edits, no git push, no PRs.
+- Each bot runs as an independent process (`mococo run <id>`)
+- Config stored at `~/.mococo/` (bots/, repos/, shared/)
+- Two-phase execution: Triage (Haiku LLM) → Execution (claude --print in repo dir)
+- Bots work directly in repo directories — repo's CLAUDE.md and .claude/ settings are used natively
+- Shared repo worklog across all bots, per-bot personal memory
+
+## Bot Permissions
+
+- **Leader:** Read-only. No file edits, no git push, no PRs.
 - **Backend, Frontend:** Can edit files, commit locally. Cannot push or create PRs.
-- **Review:** Can push branches and create PRs. Cannot merge.
-
-## Commit Format
-
-```
-type. Short description
-```
-
-Types: `feat.`, `fix.`, `refactor.`, `style.`, `docs.`, `chore.`, `test.`
+- **Reviewer:** Can push branches and create PRs. Cannot merge.
+- **Specialist (security, improver, etc.):** Read-only. Report only.
 
 ## Communication
 
-- Tag other teams with @TeamName in your responses to hand off work
+- Tag other bots with @BotName in your responses to hand off work
 - Be concise — Discord messages should be readable, not essays
 - Report status updates as you work
-- When done, tag the next team in the chain
 
 ## Repository Work
 
-- All repos are symlinked under `repos/`
-- Always `cd repos/<name>` before working
+- Repos are configured per-bot in `~/.mococo/bots/<id>/config.json` as `allowedDirs`
+- Bots `cd` to the actual repo directory to work
+- Each repo's own CLAUDE.md and .claude/ settings are loaded natively by claude CLI
 - Check out the correct branch before making changes
 - Commit each logical unit separately
 
-## AGENT.md System
+## Memory System
 
-Each repository can have an `AGENT.md` file at its root (`repos/<name>/AGENT.md`). When an agent's message mentions a repo, the prompt-builder auto-detects the repo and injects the AGENT.md contents into the system prompt.
+- **Bot personal memory** (`~/.mococo/bots/<id>/memory.md`): Personal state, tasks, context
+- **Repo worklog** (`~/.mococo/repos/<name>/worklog.md`): Shared work history across all bots
+- **Repo context** (`~/.mococo/repos/<name>/context.md`): Architecture, stack, conventions
 
-**Detection:** Explicit `repos/<name>` path takes priority, then known repo name mentioned in message text.
+## Schedule System
 
-**Fallback:** If no `AGENT.md` exists, `prompts/repo-specific/<name>.md` is used (legacy).
-
-**Template:** `defaults/AGENT.md` contains the standard sections (Overview, Tech Stack, Architecture, Branch Strategy, Key Commands, Conventions, Known Constraints).
-
-## Heartbeat Scheduled Tasks
-
-The leader's heartbeat (every 3 minutes) reads `heartbeat.md` in the workspace root and executes due tasks.
-
-**Sections:** `Daily` (once/day), `Weekly` (Monday), `Periodic` (every heartbeat), `On-demand` (manual only).
-
-**Task format:** `- [ ] description @assignee` — unchecked = active, checked = skipped.
-
-**State file:** `.mococo/heartbeat-state.json` tracks `lastDaily` and `lastWeekly` timestamps to prevent re-execution.
-
-**Code location:** `src/bot/inbox-compactor.ts` — functions `parseHeartbeatMd`, `getDueHeartbeatTasks`, `readHeartbeatState`, `writeHeartbeatState`, `formatHeartbeatReport`.
-
-**Flow:** Parse tasks → check due conditions → format report → Haiku triage decides whether to invoke leader → leader processes tasks if invoked.
+Bots can run autonomously via `schedule` config:
+- `cron`: Run on a schedule (e.g. every 2 hours)
+- `onIdle`: Run when no Discord activity for N minutes
+- Results posted to `reportChannel`

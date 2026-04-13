@@ -2,14 +2,6 @@ src/
 *.ts
 !dist/**/*.ts
 tsconfig.json
-.env
-.env.example
-.mococo/
-repos/
-prompts/
-teams.json
 *.log
 logs/
-.restart-trigger
 .gitignore
-nodemon.json

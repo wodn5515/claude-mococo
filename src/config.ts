@@ -1,130 +1,195 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { TeamsConfig, TeamConfig, McpServerConfig } from './types.js';
+import { MOCOCO_HOME } from './types.js';
+import type { BotConfig, GlobalConfig, RepoInfo } from './types.js';
 
-const AVATAR_MAP: Record<string, string> = {
-  crown: 'https://em-content.zobj.net/source/apple/391/crown_1f451.png',
-  brain: 'https://em-content.zobj.net/source/apple/391/brain_1f9e0.png',
-  gear: 'https://em-content.zobj.net/source/apple/391/gear_2699-fe0f.png',
-  palette: 'https://em-content.zobj.net/source/apple/391/artist-palette_1f3a8.png',
-  shield: 'https://em-content.zobj.net/source/apple/391/shield_1f6e1-fe0f.png',
-  eye: 'https://em-content.zobj.net/source/apple/391/eye_1f441-fe0f.png',
-  robot: 'https://em-content.zobj.net/source/apple/391/robot_1f916.png',
-  test: 'https://em-content.zobj.net/source/apple/391/test-tube_1f9ea.png',
+// ---------------------------------------------------------------------------
+// Path helpers
+// ---------------------------------------------------------------------------
+
+export function botDir(botId: string): string {
+  return path.join(MOCOCO_HOME, 'bots', botId);
+}
+
+export function repoDir(repoName: string): string {
+  return path.join(MOCOCO_HOME, 'repos', repoName);
+}
+
+// ---------------------------------------------------------------------------
+// Global config
+// ---------------------------------------------------------------------------
+
+const GLOBAL_CONFIG_PATH = path.join(MOCOCO_HOME, 'global.json');
+
+const DEFAULT_GLOBAL: GlobalConfig = {
+  globalDeny: ['gh pr merge', 'git push --force main', 'git push --force master'],
+  conversationWindow: 30,
+  humanTitle: 'Boss',
 };
 
-export function loadTeamsConfig(workspacePath: string = process.cwd()): TeamsConfig {
-  const teamsJsonPath = path.resolve(workspacePath, 'teams.json');
-
-  let raw: any;
+export function loadGlobalConfig(): GlobalConfig {
   try {
-    raw = JSON.parse(fs.readFileSync(teamsJsonPath, 'utf-8'));
-  } catch (err: unknown) {
-    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(
-        `[config] teams.json not found at ${teamsJsonPath}. Run "mococo init" first to create a workspace.`,
-      );
+    const raw = JSON.parse(fs.readFileSync(GLOBAL_CONFIG_PATH, 'utf-8'));
+    return { ...DEFAULT_GLOBAL, ...raw };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`global.json not found. Run "mococo init" first.`);
     }
     throw err;
   }
-
-  const teams: Record<string, TeamConfig> = {};
-
-  for (const [id, cfg] of Object.entries(raw.teams as Record<string, any>)) {
-    // Resolve Discord token: read env var name from config
-    const discordTokenEnv = cfg.discordTokenEnv ?? `${id.toUpperCase()}_DISCORD_TOKEN`;
-    const discordToken = process.env[discordTokenEnv] ?? '';
-    if (!discordToken) {
-      console.warn(`[config] Missing env var ${discordTokenEnv} for team "${id}" — bot will not start`);
-    }
-
-    // Resolve MCP server configs: expand $VAR references in env/header values
-    let mcpServers: Record<string, McpServerConfig> | undefined;
-    if (cfg.mcpServers) {
-      mcpServers = {};
-      for (const [name, server] of Object.entries(cfg.mcpServers as Record<string, any>)) {
-        if (server.type === 'http') {
-          // HTTP MCP server — resolve $VAR in headers
-          const resolvedHeaders: Record<string, string> = {};
-          if (server.headers) {
-            for (const [key, val] of Object.entries(server.headers as Record<string, string>)) {
-              if (val.startsWith('$')) {
-                const envName = val.slice(1);
-                const envValue = process.env[envName];
-                if (envValue === undefined) {
-                  console.warn(`[config] MCP server "${name}" for team "${id}": env var ${envName} is not set (header: ${key})`);
-                }
-                resolvedHeaders[key] = envValue ?? '';
-              } else {
-                resolvedHeaders[key] = val;
-              }
-            }
-          }
-          mcpServers[name] = {
-            type: 'http',
-            url: server.url,
-            headers: Object.keys(resolvedHeaders).length > 0 ? resolvedHeaders : undefined,
-          };
-        } else {
-          // stdio MCP server — resolve $VAR in env
-          const resolvedEnv: Record<string, string> = {};
-          if (server.env) {
-            for (const [key, val] of Object.entries(server.env as Record<string, string>)) {
-              if (val.startsWith('$')) {
-                const envName = val.slice(1);
-                const envValue = process.env[envName];
-                if (envValue === undefined) {
-                  console.warn(`[config] MCP server "${name}" for team "${id}": env var ${envName} is not set (key: ${key})`);
-                }
-                resolvedEnv[key] = envValue ?? '';
-              } else {
-                resolvedEnv[key] = val;
-              }
-            }
-          }
-          mcpServers[name] = {
-            command: server.command,
-            args: server.args,
-            env: Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined,
-          };
-        }
-      }
-    }
-
-    teams[id] = {
-      id,
-      name: cfg.name,
-      color: cfg.color ? parseInt(cfg.color.replace('#', ''), 16) : 0x808080,
-      avatar: AVATAR_MAP[cfg.avatar] ?? cfg.avatar,
-      engine: cfg.engine ?? 'claude',
-      model: cfg.model ?? 'sonnet',
-      maxBudget: cfg.maxBudget ?? 10,
-      prompt: cfg.prompt,
-      isLeader: cfg.isLeader ?? false,
-      channels: cfg.channels,
-      discordUserId: cfg.discordUserId,
-      useTeams: cfg.useTeams ?? false,
-      teamRules: cfg.teamRules,
-      git: cfg.git ?? {
-        name: `${cfg.name} (mococo)`,
-        email: `${id}@users.noreply.github.com`,
-      },
-      discordToken,
-      mcpServers,
-      permissions: cfg.permissions ?? {},
-    };
-  }
-
-  return {
-    teams,
-    globalDeny: raw.globalDeny ?? [],
-    conversationWindow: raw.conversationWindow ?? 30,
-    workspacePath,
-    humanDiscordId: raw.humanDiscordId,
-    humanTitle: raw.humanTitle ?? 'Boss',
-  };
 }
 
-export function getLeaderTeam(config: TeamsConfig): TeamConfig | undefined {
-  return Object.values(config.teams).find(t => t.isLeader);
+export function saveGlobalConfig(config: GlobalConfig): void {
+  fs.writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+}
+
+// ---------------------------------------------------------------------------
+// Bot config
+// ---------------------------------------------------------------------------
+
+export function loadBotConfig(botId: string): BotConfig {
+  const configPath = path.join(botDir(botId), 'config.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    return {
+      id: botId,
+      ...raw,
+      permissions: raw.permissions ?? {},
+      allowedDirs: raw.allowedDirs ?? [],
+      maxBudget: raw.maxBudget ?? 10,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Bot "${botId}" not found. Run "mococo adopt ${botId}" first.`);
+    }
+    throw err;
+  }
+}
+
+export function saveBotConfig(botId: string, config: Omit<BotConfig, 'id'>): void {
+  const dir = botDir(botId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config, null, 2) + '\n');
+}
+
+// ---------------------------------------------------------------------------
+// Bot persona
+// ---------------------------------------------------------------------------
+
+export function loadPersona(botId: string): string {
+  const personaPath = path.join(botDir(botId), 'persona.md');
+  try {
+    return fs.readFileSync(personaPath, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function savePersona(botId: string, content: string): void {
+  const dir = botDir(botId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'persona.md'), content);
+}
+
+// ---------------------------------------------------------------------------
+// Bot personal memory
+// ---------------------------------------------------------------------------
+
+export function loadBotMemory(botId: string): string {
+  const memPath = path.join(botDir(botId), 'memory.md');
+  try {
+    return fs.readFileSync(memPath, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function saveBotMemory(botId: string, content: string): void {
+  const dir = botDir(botId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'memory.md'), content);
+}
+
+// ---------------------------------------------------------------------------
+// Repo memory (shared across all bots)
+// ---------------------------------------------------------------------------
+
+export function loadRepoContext(repoName: string): string {
+  const ctxPath = path.join(repoDir(repoName), 'context.md');
+  try {
+    return fs.readFileSync(ctxPath, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function saveRepoContext(repoName: string, content: string): void {
+  const dir = repoDir(repoName);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'context.md'), content);
+}
+
+export function loadWorklog(repoName: string): string {
+  const wlPath = path.join(repoDir(repoName), 'worklog.md');
+  try {
+    return fs.readFileSync(wlPath, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function appendWorklog(repoName: string, entry: string): void {
+  const dir = repoDir(repoName);
+  fs.mkdirSync(dir, { recursive: true });
+  const wlPath = path.join(dir, 'worklog.md');
+  fs.appendFileSync(wlPath, entry + '\n');
+}
+
+// ---------------------------------------------------------------------------
+// List bots / repos
+// ---------------------------------------------------------------------------
+
+export function listBotIds(): string[] {
+  const botsDir = path.join(MOCOCO_HOME, 'bots');
+  try {
+    return fs.readdirSync(botsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && fs.existsSync(path.join(botsDir, d.name, 'config.json')))
+      .map(d => d.name);
+  } catch {
+    return [];
+  }
+}
+
+export function listRepoNames(): string[] {
+  const reposDir = path.join(MOCOCO_HOME, 'repos');
+  try {
+    return fs.readdirSync(reposDir, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Build repo summaries for triage
+// ---------------------------------------------------------------------------
+
+const WORKLOG_SUMMARY_LINES = 20;
+
+export function loadRepoSummaries(allowedDirs: string[]): RepoInfo[] {
+  const infos: RepoInfo[] = [];
+
+  for (const dirPath of allowedDirs) {
+    const name = path.basename(dirPath);
+    const context = loadRepoContext(name);
+    const fullWorklog = loadWorklog(name);
+    // Take last N lines as summary
+    const lines = fullWorklog.split('\n');
+    const worklogSummary = lines.slice(-WORKLOG_SUMMARY_LINES).join('\n');
+
+    infos.push({ name, path: dirPath, context, worklogSummary });
+  }
+
+  return infos;
 }

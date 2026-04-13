@@ -1,389 +1,59 @@
-# claude-mococo
+# claude-mococo v2
 
-**AI team company on Discord.** Multiple AI agents run as distinct Discord bots — each with its own name, personality, git identity, engine, and permissions. You talk in Discord; agents coordinate, commit code, and open PRs.
+**AI 봇 분양소.** Discord 봇들이 실제 레포지토리에서 직접 작업하고, 자율적으로 코드를 분석하고 개선합니다.
+
+**AI Bot Adoption Center.** Discord bots work directly in real repositories, autonomously analyzing and improving code.
+
+---
+
+## How It Works / 작동 방식
 
 ```
-You: "Add a login page"
+터미널 1: mococo run leader      # 대장코코 — 조율, 지시
+터미널 2: mococo run stack       # 스택코코 — 백엔드 구현
+터미널 3: mococo run brush       # 브러쉬코코 — 프론트엔드 구현
+터미널 4: mococo run checker     # 체커코코 — 코드 리뷰, PR
+터미널 5: mococo run security    # 방패코코 — 보안 스캔 (자동)
+터미널 6: mococo run improver    # 개선코코 — 구조 개선 (자동)
+```
 
-Leader (bot): "On it. @Backend please implement auth routes. @Frontend build the form."
-Backend (bot): "Got it." → edits files → commits locally
-Frontend (bot): "Done." → edits files → commits locally
-Reviewer (bot): → reviews code → pushes branch → opens PR
+Each bot runs as an independent process. When a bot needs to work on a repo, it `cd`s to the actual directory and runs `claude --print`, using the repo's native `CLAUDE.md` and `.claude/` settings.
+
+각 봇은 독립 프로세스로 실행됩니다. 레포 작업이 필요하면 실제 디렉토리로 이동해서 `claude --print`를 실행하고, 해당 레포의 `CLAUDE.md`와 `.claude/` 설정을 네이티브로 사용합니다.
+
+### Message Flow / 메시지 흐름
+
+```
+Discord 메시지 수신
+  │
+  ▼
+[Phase 1: Triage] — Haiku LLM이 판단
+  - 어떤 레포에서 작업할지?
+  - 직접 응답만 하면 되는지?
+  - 무시해도 되는 메시지인지?
+  │
+  ▼
+[Phase 2: Execution] — 해당 레포 디렉토리에서 claude --print
+  - 레포의 CLAUDE.md, .claude/ 설정 자동 적용
+  - 봇 페르소나 + 작업 이력(worklog)을 시스템 프롬프트로 주입
+  │
+  ▼
+결과 → 메모리 업데이트 → worklog 기록 → Discord 응답
 ```
 
 ---
 
-## Prerequisites
+## Prerequisites / 사전 요구사항
 
-- **Node.js** ≥ 18
-- **At least one AI engine CLI** installed and authenticated:
-  ```bash
-  claude --version                  # Claude CLI — recommended, full agent
-  npm install -g @openai/codex      # Codex CLI — full agent
-  npm install -g @google/gemini-cli # Gemini CLI — text advisor only
-  ```
-- **One Discord bot per agent** (each agent needs its own bot application)
-- **GitHub PAT** (for push / PR creation)
+- **Node.js** >= 18
+- **Claude CLI** installed and authenticated (`claude --version`)
+- **One Discord bot application per agent** ([discord.com/developers](https://discord.com/developers/applications))
 
 ---
 
-## Quick Start
+## Quick Start / 빠른 시작
 
-### 1. Install
-
-```bash
-npm install -g claude-mococo
-```
-
-Or run without installing:
-
-```bash
-npx claude-mococo init
-npx claude-mococo add
-npx claude-mococo start
-```
-
-### 2. Create Discord bots
-
-For each agent you plan to run:
-
-1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
-2. Sidebar → **Bot**:
-   - Copy the token
-   - Enable all three **Privileged Gateway Intents**: Presence, Server Members, **Message Content**
-3. Sidebar → **OAuth2** → URL Generator:
-   - Scopes: `bot`
-   - Permissions: `Send Messages`, `Read Message History`, `Embed Links`, `Attach Files`
-   - Open the generated URL → add the bot to your server
-
-### 3. Initialize workspace and add agents
-
-```bash
-mkdir my-team && cd my-team
-mococo init    # creates workspace, asks for Discord channel ID
-mococo add     # interactive wizard — name, engine, token, etc.
-```
-
-### 4. Link repos and start
-
-```bash
-ln -s /path/to/my-app repos/my-app   # symlink your repo(s)
-mococo start
-```
-
-Talk to your bot in Discord. Done.
-
----
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `mococo init` | Create a new workspace in the current directory |
-| `mococo add` | Add an agent (interactive wizard) |
-| `mococo start` | Start all agents |
-| `mococo dev` | Start in dev mode with hot reload |
-| `mococo list` | List configured agents |
-| `mococo edit <id>` | Edit agent settings |
-| `mococo remove <id>` | Remove an agent |
-| `mococo restart` | Trigger rebuild and restart |
-
-### Discord commands (in-server)
-
-| Command | Description |
-|---------|-------------|
-| `!status` | Show all agents (busy/idle, engine, cost) |
-| `!teams` | List agents and their engines |
-| `!repos` | List linked repositories |
-
----
-
-## Team Architecture
-
-A full team example:
-
-| Agent | Engine | Model | Role | Permissions |
-|-------|--------|-------|------|-------------|
-| **Leader** | Claude | opus | Coordinates team, delegates, responds to all messages | Read-only |
-| **Backend** | Claude | sonnet | Implements server code, APIs | Edit files + local commits |
-| **Frontend** | Claude | sonnet | Implements UI, components | Edit files + local commits, Figma MCP |
-| **Reviewer** | Claude | opus | Code review, branch push, PR creation | Push + PR create |
-
-You can start with just a leader and expand later.
-
----
-
-## How It Works
-
-### Message Routing
-
-- No @mention → the agent with `"isLeader": true` responds
-- `@mention` a bot → that agent responds
-- One agent mentions another → that agent is automatically invoked
-- Chain depth and budget are tracked to prevent infinite loops
-
-### Permissions
-
-Controlled per-agent in `teams.json`. The permission value is matched against the command prefix:
-
-```jsonc
-"permissions": {
-  "allow": ["git push", "gh pr create"],
-  "deny": ["gh pr merge"]
-}
-```
-
-Typical tiers:
-- **Leader:** Read-only — deny `git push`, `gh pr`, file edits
-- **Backend / Frontend:** Edit files, commit locally — deny `git push`, `gh pr merge`
-- **Reviewer:** Push and open PRs — deny `gh pr merge`
-- **All agents:** `gh pr merge` and `git push --force main/master` denied globally
-
-### Engines
-
-| Engine | Capability | CLI |
-|--------|-----------|-----|
-| `"claude"` | Full agent — files, git, shell, MCP | Claude CLI |
-| `"codex"` | Full agent | Codex CLI (OpenAI) |
-| `"gemini"` | Text advisor only — no file/git access | Gemini CLI |
-
-### Memory System
-
-Each agent has two memory levels, persisted in `.mococo/memory/{agent-id}/`:
-
-- **Long-term** (`long-term.md`): Permanent knowledge — project structure, policies, user preferences
-- **Short-term** (`short-term.md`): Working context — current tasks, blockers, temporary state
-
-Agents update their memory at the end of every response. Short-term tracks in-progress work; long-term holds what should survive across sessions.
-
-Additionally, `.mococo/episodes/{id}.jsonl` stores a timestamped activity log (generated by a lightweight Haiku model) injected as "Recent Activity" into each prompt.
-
-### Stress-Based Persona
-
-Bots dynamically adapt their personality based on workload and stress levels. As backlogs, failed tasks, or high activity accumulate, the bot's mood shifts:
-
-| Level | State | Behavior |
-|-------|-------|----------|
-| 0 | Calm | Normal operations |
-| 1 | Busy | Slight urgency, faster decisions |
-| 2 | Pressured | More direct/decisive, tighter focus |
-| 3 | Overloaded | Prioritizes only critical work |
-
-Stress decays naturally over time and is triggered by events like failed tasks, rejections, timeouts, and queue buildup. Customize sensitivity per agent via `stressProfile` in `teams.json`.
-
-### AGENT.md (Repo Context)
-
-Place an `AGENT.md` file at a repository's root to provide AI-friendly context about that codebase. When an agent works on that repo, the file is automatically detected and injected into the prompt — no configuration needed.
-
-Typical contents: project overview, tech stack, architecture summary, branch strategy, build/test commands, naming conventions. Falls back to `prompts/repo-specific/{repo}.md` if `AGENT.md` doesn't exist.
-
-### Condensed Prompt Mode
-
-Repeated invocations within the same conversation automatically receive a condensed prompt, reducing token usage by ~37%. First invocation gets the full prompt; subsequent calls strip examples and redundant sections while preserving critical rules. Detection is automatic — no configuration needed.
-
-### Inbox System (Leader Only)
-
-When agents mention the leader in their output, messages are appended to the leader's inbox (`.mococo/inbox/{id}.md`). On next invocation, the leader receives a prioritized inbox summary — messages that mention the leader appear first.
-
-### Heartbeat & Scheduled Tasks
-
-The leader runs a heartbeat every **3 minutes**. If `heartbeat.md` exists in the workspace root, it is parsed for scheduled tasks:
-
-| Section | Frequency | Description |
-|---------|-----------|-------------|
-| `## Daily` | Once per day (first heartbeat) | Daily recurring tasks |
-| `## Weekly` | Once per week (Monday) | Weekly recurring tasks |
-| `## Hourly` | Once per hour | Hourly monitoring |
-| `## Periodic` | Every heartbeat (~3 min) | Lightweight monitoring |
-| `## On-demand` | Manual trigger only | One-off tasks |
-
-Task format:
-
-```markdown
-- [ ] Task description @assignee
-```
-
-- `- [ ]` = active (processed each run)
-- `- [x]` = inactive (skipped)
-- `@assignee` = optional, routes to a specific agent
-
-State is tracked in `.mococo/heartbeat-state.json` to prevent duplicate daily/weekly runs.
-
-Reporting principle: **if nothing new happened, nothing is posted.** Only report when there's a new issue, assignment, escalation, or anomaly.
-
-### Dispatch Ledger
-
-When the leader delegates work to another agent, the delegation is recorded. The leader tracks whether the work was completed and follows up if unresolved.
-
-### Agent Teams (Sub-Agent Spawning)
-
-Agents with `"useTeams": true` can spawn sub-agents to handle complex parallel tasks. Useful for:
-- Multi-file refactors
-- Parallel feature work
-- Long-running research + implementation tasks
-
-Optional `"teamRules"` array adds custom constraints for how sub-agents are created and behave.
-
----
-
-## Configuration Reference
-
-### `teams.json` — agent fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Display name — shown in Discord embeds and team directory |
-| `color` | string | Hex color for Discord embeds (e.g. `"#5865F2"`) |
-| `avatar` | string | Built-in avatar or image URL. Built-ins: `crown`, `brain`, `gear`, `palette`, `shield`, `eye`, `robot`, `test` |
-| `engine` | string | `"claude"`, `"codex"`, or `"gemini"` |
-| `model` | string | Model name — e.g. `"sonnet"`, `"opus"`, `"o3"`, `"gemini-2.5-pro"` |
-| `maxBudget` | number | Max dollar spend per invocation (Claude only) |
-| `prompt` | string | Path to the personality/instructions file (relative to workspace) |
-| `isLeader` | boolean | If `true`, responds to all messages without being @mentioned |
-| `channels` | string[] | Optional. Restrict which Discord channel IDs this bot responds in. Omit for all channels. |
-| `git.name` / `git.email` | string | Git author identity for commits |
-| `discordTokenEnv` | string | Env var name for this bot's Discord token. Defaults to `{ID_UPPERCASE}_DISCORD_TOKEN` |
-| `discordUserId` | string | Auto-populated on first login — do not set manually |
-| `useTeams` | boolean | Enable sub-agent spawning for complex tasks |
-| `teamRules` | string[] | Custom rules for sub-agent behavior (used when `useTeams: true`) |
-| `stressProfile` | object | Customize stress sensitivity, decay rate, and mood descriptions |
-| `permissions.allow` / `.deny` | string[] | Allowed/denied shell command prefixes |
-| `mcpServers` | object | MCP server configurations (see below) |
-
-### `teams.json` — global fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `globalDeny` | string[] | Commands forbidden across all agents |
-| `conversationWindow` | number | Recent Discord messages included in each prompt (default: `30`) |
-| `humanTitle` | string | How agents address you — shown in prompts and shared rules (default: `"Boss"`) |
-| `humanDiscordId` | string | Your Discord user ID — used for correct @mention in agent output |
-
-### MCP Servers
-
-Two transport types are supported. In `env` or `headers` values, `$VAR` is expanded from the environment at startup.
-
-**stdio** (local process):
-```jsonc
-"mcpServers": {
-  "google-calendar": {
-    "command": "npx",
-    "args": ["-y", "@cocal/google-calendar-mcp"],
-    "env": { "GOOGLE_OAUTH_CREDENTIALS": "$GOOGLE_OAUTH_CREDENTIALS" }
-  }
-}
-```
-
-**HTTP** (remote/hosted):
-```jsonc
-"mcpServers": {
-  "figma": {
-    "type": "http",
-    "url": "https://mcp.figma.com/mcp",
-    "headers": { "X-Figma-Token": "$FIGMA_PERSONAL_ACCESS_TOKEN" }
-  }
-}
-```
-
-### Environment Variables
-
-Discord tokens are read from env vars at startup. The default env var name is `{ID_UPPERCASE}_DISCORD_TOKEN` (e.g. team id `leader` → `LEADER_DISCORD_TOKEN`). Override with `discordTokenEnv` in `teams.json`.
-
-```bash
-# Discord tokens — one per bot
-LEADER_DISCORD_TOKEN=...
-BACKEND_DISCORD_TOKEN=...
-FRONTEND_DISCORD_TOKEN=...
-REVIEWER_DISCORD_TOKEN=...
-
-# Channel and server
-WORK_CHANNEL_ID=              # Optional. Restrict to one Discord channel. Empty = all channels.
-HOOK_PORT=9876                # HTTP webhook receiver port (default 9876)
-
-# GitHub — required for push / PR creation
-GITHUB_PAT=...
-
-# MCP integrations (examples)
-GOOGLE_OAUTH_CREDENTIALS=...  # Google Calendar
-FIGMA_PERSONAL_ACCESS_TOKEN=... # Figma
-```
-
----
-
-## Prompt & Persona Files
-
-Each agent's personality, role, and rules live in a Markdown file (the `prompt` field in `teams.json`). This file is prepended to every prompt, followed by automatically injected context (conversation history, memory, team directory, etc.).
-
-**Recommended structure for a prompt file:**
-
-```markdown
-# Agent Name
-
-You are **AgentName**, an AI assistant on Discord.
-
-## Character
-- Role, MBTI, speech style, habits
-
-## Role
-What this agent is responsible for. What it does NOT do. What decisions it can make independently vs. needs approval for.
-
-## Expertise
-Key skills and technologies.
-
-## Rules
-Behavioral constraints specific to this agent.
-```
-
-### Shared Rules
-
-Create `prompts/shared-rules.md` in your workspace to inject common rules into every agent's prompt. Supports two placeholders:
-- `{{humanTitle}}` → replaced with `humanTitle` from `teams.json`
-- `{{leaderName}}` → replaced with the leader agent's name
-
-A default `shared-rules.md` is provided in `defaults/` when you run `mococo init`.
-
-### Repo-Specific Rules
-
-Create `prompts/repo-specific/{repo-name}.md` in your workspace. When an agent's prompt contains a reference to `repos/{repo-name}`, those rules are automatically appended to the prompt.
-
----
-
-## Workspace File Layout
-
-```
-my-team/
-├── teams.json              # Agent configuration
-├── .env                    # Discord tokens, API keys
-├── heartbeat.md            # Scheduled tasks
-├── prompts/
-│   ├── leader.md           # Leader persona
-│   ├── backend.md          # Backend persona
-│   ├── shared-rules.md     # Rules injected into all agents
-│   └── repo-specific/
-│       └── my-app.md       # Rules injected when working on repos/my-app
-├── repos/
-│   └── my-app -> /path/to/my-app   # Symlinked repositories
-└── .mococo/                # Runtime state (auto-generated)
-    ├── inbox/              # Leader inbox
-    ├── memory/             # Per-agent memory
-    ├── episodes/           # Activity log
-    └── heartbeat-state.json
-```
-
----
-
-## Hooks
-
-Claude Code hooks let you intercept agent tool calls for logging, permission gating, or side effects. Two hook scripts are provided in `hooks/`:
-
-- **`event-bridge.sh`** — Forwards hook events to the mococo HTTP server (port `HOOK_PORT`). Enables the system to track agent activity, detect improvement findings, and trigger follow-up.
-- **`permission-gate.sh`** — Blocks disallowed tool calls before they execute. Enforces `permissions.deny` at the shell level.
-
-Hook setup is configured in `.claude/settings.json` (or `settings.local.json`) in each agent's Claude session. The `mococo init` command sets this up automatically.
-
----
-
-## Manual Setup (without CLI)
+### 1. Install / 설치
 
 ```bash
 git clone https://github.com/wodn5515/claude-mococo.git
@@ -392,27 +62,377 @@ npm install
 npm run build
 ```
 
-Create `teams.json`, write prompt files in `prompts/`, set tokens in `.env`, then:
+### 2. Initialize adoption center / 분양소 초기화
 
 ```bash
-npm start
+node dist/cli/index.js init
+```
+
+Creates `~/.mococo/` with the following structure:
+
+```
+~/.mococo/
+├── global.json          # Global settings (humanDiscordId, globalDeny)
+├── bots/                # Per-bot config, persona, memory
+├── repos/               # Shared repo memory (worklog, context)
+└── shared/              # Shared data (members, inbox)
+```
+
+### 3. Create Discord bots / 디스코드 봇 생성
+
+For each bot you want to run:
+
+1. [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
+2. **Bot** tab → Copy token, enable **Message Content Intent**
+3. **OAuth2** → Scopes: `bot` → Permissions: `Send Messages`, `Read Message History`
+4. Invite bot to your server using the generated URL
+
+### 4. Adopt bots / 봇 분양
+
+```bash
+# Leader — coordinates, delegates, doesn't write code
+node dist/cli/index.js adopt leader
+
+# Backend developer
+node dist/cli/index.js adopt stack
+
+# Frontend developer
+node dist/cli/index.js adopt brush
+
+# Code reviewer — pushes branches, creates PRs
+node dist/cli/index.js adopt checker
+
+# (Optional) Security scanner — runs on cron, read-only
+node dist/cli/index.js adopt security
+
+# (Optional) Code improver — runs when idle, read-only
+node dist/cli/index.js adopt improver
+```
+
+The interactive wizard asks for: name, engine, model, Discord token, allowed directories, git identity.
+
+대화형 위저드가 이름, 엔진, 모델, Discord 토큰, 접근 허용 디렉토리, git 신원을 물어봅니다.
+
+### 5. Configure specialist bots / 전문 봇 설정
+
+After adopting, edit the config and persona files directly:
+
+분양 후 설정 파일과 페르소나 파일을 직접 수정합니다:
+
+#### Leader (대장코코)
+
+`~/.mococo/bots/leader/config.json`:
+```json
+{
+  "name": "대장코코",
+  "engine": "claude",
+  "model": "sonnet",
+  "isLeader": true,
+  "allowedDirs": [
+    "/home/jake/projects/my-app",
+    "/home/jake/projects/api-server"
+  ],
+  "permissions": {
+    "deny": ["git push", "gh pr", "Edit", "Write"]
+  },
+  "discordTokenEnv": "LEADER_DISCORD_TOKEN",
+  "git": { "name": "Leader", "email": "leader@users.noreply.github.com" },
+  "maxBudget": 5
+}
+```
+
+#### Backend (스택코코)
+
+`~/.mococo/bots/stack/config.json`:
+```json
+{
+  "name": "스택코코",
+  "engine": "claude",
+  "model": "sonnet",
+  "allowedDirs": [
+    "/home/jake/projects/my-app",
+    "/home/jake/projects/api-server"
+  ],
+  "permissions": {
+    "deny": ["git push", "gh pr merge"]
+  },
+  "discordTokenEnv": "STACK_DISCORD_TOKEN",
+  "git": { "name": "Stack", "email": "stack@users.noreply.github.com" },
+  "maxBudget": 10
+}
+```
+
+#### Security Scanner (방패코코) — Cron, read-only
+
+`~/.mococo/bots/security/config.json`:
+```json
+{
+  "name": "방패코코",
+  "engine": "claude",
+  "model": "sonnet",
+  "allowedDirs": [
+    "/home/jake/projects/my-app",
+    "/home/jake/projects/api-server"
+  ],
+  "permissions": {
+    "deny": ["Edit", "Write", "git push", "gh pr"]
+  },
+  "schedule": {
+    "cron": "0 */3 * * *",
+    "reportChannel": "DISCORD_CHANNEL_ID"
+  },
+  "discordTokenEnv": "SECURITY_DISCORD_TOKEN",
+  "git": { "name": "Security", "email": "security@users.noreply.github.com" },
+  "maxBudget": 5
+}
+```
+
+`~/.mococo/bots/security/persona.md`:
+```markdown
+# 방패코코
+
+You are a security specialist bot. Your ONLY job is to find security vulnerabilities.
+
+## What you scan for
+- SQL injection, XSS, CSRF
+- Hardcoded secrets, exposed API keys
+- Authentication/authorization flaws
+- Insecure dependencies
+- Path traversal, command injection
+
+## Rules
+- NEVER modify code. Report only.
+- Be specific: file path, line number, severity, description
+- Severity levels: CRITICAL, HIGH, MEDIUM, LOW
+- Skip false positives. Only report what you are confident about.
+- Tag @대장코코 for CRITICAL/HIGH findings
+```
+
+#### Code Improver (개선코코) — Idle trigger, read-only
+
+`~/.mococo/bots/improver/config.json`:
+```json
+{
+  "name": "개선코코",
+  "engine": "claude",
+  "model": "sonnet",
+  "allowedDirs": [
+    "/home/jake/projects/my-app"
+  ],
+  "permissions": {
+    "deny": ["Edit", "Write", "git push", "gh pr"]
+  },
+  "schedule": {
+    "onIdle": true,
+    "idleDelayMinutes": 15,
+    "reportChannel": "DISCORD_CHANNEL_ID"
+  },
+  "discordTokenEnv": "IMPROVER_DISCORD_TOKEN",
+  "git": { "name": "Improver", "email": "improver@users.noreply.github.com" },
+  "maxBudget": 5
+}
+```
+
+`~/.mococo/bots/improver/persona.md`:
+```markdown
+# 개선코코
+
+You are a code quality specialist. You find structural improvements, not bugs.
+
+## What you look for
+- Code duplication that should be extracted
+- Overly complex functions that should be split
+- Missing error handling at system boundaries
+- Test coverage gaps
+- Dead code, unused imports
+- Naming inconsistencies
+- Architecture improvements
+
+## Rules
+- NEVER modify code. Report only.
+- Prioritize by impact: what would improve maintainability the most?
+- Be actionable: "Extract X into a shared util" not "code could be better"
+- Tag @대장코코 with your findings
+```
+
+### 6. Set environment variables / 환경변수 설정
+
+```bash
+export LEADER_DISCORD_TOKEN="..."
+export STACK_DISCORD_TOKEN="..."
+export BRUSH_DISCORD_TOKEN="..."
+export CHECKER_DISCORD_TOKEN="..."
+export SECURITY_DISCORD_TOKEN="..."
+export IMPROVER_DISCORD_TOKEN="..."
+```
+
+Or add to your shell profile (`~/.bashrc`, `~/.zshrc`).
+
+### 7. Run bots / 봇 실행
+
+Each bot in its own terminal tab:
+
+각 봇을 별도 터미널 탭에서 실행:
+
+```bash
+# Tab 1
+node dist/cli/index.js run leader
+
+# Tab 2
+node dist/cli/index.js run stack
+
+# Tab 3
+node dist/cli/index.js run checker
+
+# Tab 4 — security scanner (auto-runs every 3 hours)
+node dist/cli/index.js run security
+
+# Tab 5 — code improver (auto-runs when idle 15min)
+node dist/cli/index.js run improver
+```
+
+### 8. Talk to them / 대화
+
+In Discord:
+```
+You: "my-app에 로그인 기능 추가해줘"
+대장코코: "@스택코코 /api/auth 엔드포인트 만들어. @브러쉬코코 로그인 페이지 UI 만들어."
+스택코코: (cd /home/jake/my-app → claude --print → 코드 작성 → commit) "완료 @대장코코"
+브러쉬코코: (same flow) "완료 @대장코코"
+대장코코: "@체커코코 리뷰해줘"
+체커코코: (reviews, pushes, opens PR) "PR #42 생성 완료"
+```
+
+Meanwhile, in the background:
+```
+방패코코: [3시간마다] "my-app 보안 스캔 결과: 이상 없음"
+개선코코: [idle 15분 후] "@대장코코 my-app의 src/utils/auth.ts에서 중복 코드 발견. extractToken() 함수로 추출 권장."
 ```
 
 ---
 
-## Troubleshooting
+## CLI Commands / CLI 명령어
+
+| Command | Description |
+|---------|-------------|
+| `mococo init` | Create ~/.mococo/ adoption center / 분양소 생성 |
+| `mococo adopt <id>` | Adopt a new bot (interactive) / 새 봇 분양 |
+| `mococo run <id>` | Run a bot in current terminal / 봇 실행 |
+| `mococo list` | List all adopted bots / 봇 목록 |
+| `mococo release <id>` | Remove a bot / 봇 삭제 |
+
+---
+
+## Directory Structure / 디렉토리 구조
+
+```
+~/.mococo/
+├── global.json                     # Global settings
+├── bots/
+│   ├── leader/
+│   │   ├── config.json             # Bot config
+│   │   ├── persona.md              # Personality, role, rules
+│   │   └── memory.md               # Personal memory (auto-updated)
+│   ├── stack/
+│   │   └── ...
+│   ├── security/
+│   │   └── ...
+│   └── improver/
+│       └── ...
+├── repos/                          # Shared across ALL bots
+│   ├── my-app/
+│   │   ├── context.md              # Repo info (architecture, stack)
+│   │   └── worklog.md              # Work history (who did what when)
+│   └── api-server/
+│       └── ...
+└── shared/
+    ├── members.md                  # Discord server members
+    └── inbox/                      # Inter-bot messages
+```
+
+---
+
+## Schedule Options / 스케줄 설정
+
+Add `schedule` to any bot's `config.json`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cron` | string | Cron expression (e.g. `"0 */2 * * *"` = every 2 hours) |
+| `onIdle` | boolean | Auto-trigger when no activity for `idleDelayMinutes` |
+| `idleDelayMinutes` | number | Minutes of idle before trigger (default: 10) |
+| `reportChannel` | string | Discord channel ID to post scheduled results |
+
+### Cron examples / Cron 예시
+
+```
+"*/30 * * * *"     — every 30 minutes / 30분마다
+"0 */2 * * *"      — every 2 hours / 2시간마다
+"0 9 * * *"        — daily at 9am / 매일 오전 9시
+"0 9 * * 1"        — every Monday 9am / 매주 월요일 9시
+```
+
+---
+
+## Bot Roles Guide / 봇 역할 가이드
+
+| Role | Schedule | Permissions | Description |
+|------|----------|-------------|-------------|
+| **Leader** | none | read-only | Coordinates team, delegates work / 팀 조율, 작업 배분 |
+| **Backend** | none | edit + commit | Implements server code / 서버 코드 구현 |
+| **Frontend** | none | edit + commit | Implements UI / UI 구현 |
+| **Reviewer** | none | push + PR | Reviews code, opens PRs / 코드 리뷰, PR 생성 |
+| **Security** | cron | read-only | Scans for vulnerabilities / 보안 취약점 스캔 |
+| **Improver** | idle | read-only | Finds code quality issues / 코드 품질 개선점 발견 |
+| **Tester** | cron | read-only | Finds test coverage gaps / 테스트 커버리지 분석 |
+| **Bug Hunter** | idle | read-only | Finds error-prone logic / 에러 로직 탐색 |
+
+Mix and match as needed. Each bot is defined by its **persona + config** — the system is generic.
+
+필요에 따라 조합하세요. 각 봇은 **페르소나 + 설정**으로 정의됩니다 — 시스템 자체는 범용입니다.
+
+---
+
+## AGENT.md (Repo Context)
+
+Place an `AGENT.md` at your repository root. When a bot works in that repo, Claude CLI loads it automatically — no mococo configuration needed.
+
+레포지토리 루트에 `AGENT.md`를 배치하세요. 봇이 해당 레포에서 작업할 때 Claude CLI가 자동으로 로딩합니다.
+
+```markdown
+# My App — AGENT.md
+
+## Overview
+Next.js 14 + TypeScript e-commerce app.
+
+## Tech Stack
+- Next.js 14 (App Router), React 18, Tailwind CSS
+- Prisma ORM, PostgreSQL
+- NextAuth.js for authentication
+
+## Key Commands
+- `npm run dev` — start dev server
+- `npm test` — run tests
+- `npm run lint` — lint check
+
+## Conventions
+- Korean comments, English code
+- All API routes in src/app/api/
+- Tests in __tests__/ next to source files
+```
+
+---
+
+## Troubleshooting / 문제 해결
 
 | Problem | Fix |
 |---------|-----|
 | Bot doesn't respond | Enable **Message Content Intent** in Discord Developer Portal |
-| "bot will not start" in logs | Env var `{ID}_DISCORD_TOKEN` is missing or empty |
-| Can't push to GitHub | Check `GITHUB_PAT` in `.env` |
-| Wrong commit author | Set `git.name` and `git.email` in `teams.json` |
-| Agent loops indefinitely | Set `maxBudget` in `teams.json` to cap spend per invocation |
-| MCP tool not available | Check the env var referenced in `mcpServers` is set in `.env` |
-| Heartbeat not triggering | Check `heartbeat.md` exists in the workspace root |
-| Bot responds in wrong channels | Set `channels` in `teams.json` to restrict channel IDs |
-| "command not found: codex" | Install it or change `engine` to `"claude"` |
+| "Missing env var" | Set the Discord token env var before running |
+| Bot can't access repo | Add the path to `allowedDirs` in config.json |
+| Scheduled task not running | Check `schedule` config and `reportChannel` is valid |
+| Bot responds to wrong messages | Set `channels` in config.json to restrict |
+| "claude: command not found" | Install Claude CLI: `npm install -g @anthropic-ai/claude-code` |
 
 ---
 

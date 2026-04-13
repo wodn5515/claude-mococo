@@ -28,15 +28,3 @@ export async function confirm(question: string, defaultYes = false): Promise<boo
   if (!val) return defaultYes;
   return val === 'y' || val === 'yes';
 }
-
-export async function choose(question: string, options: string[], defaultIndex = 0): Promise<string> {
-  console.log(question);
-  for (let i = 0; i < options.length; i++) {
-    const marker = i === defaultIndex ? '>' : ' ';
-    console.log(`  ${marker} ${i + 1}. ${options[i]}`);
-  }
-  const answer = await getRL().question(`Choice (${defaultIndex + 1}): `);
-  const idx = parseInt(answer.trim()) - 1;
-  if (idx >= 0 && idx < options.length) return options[idx];
-  return options[defaultIndex];
-}

@@ -1,6 +1,48 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## [1.0.0] — 2026-04-13
+
+### Breaking Changes
+
+Complete architecture redesign. **Not backward compatible with 0.x.**
+
+- **Single-process → multi-process**: Each bot runs independently in its own terminal (`mococo run <id>`)
+- **Central workspace → adoption center**: Config moved from `teams.json` in a workspace to `~/.mococo/` global directory
+- **Prompt assembly → native execution**: Bots `cd` to repo directories and run `claude --print`, using the repo's own `CLAUDE.md` and `.claude/` settings natively
+- **Symlinked repos → direct access**: No more `repos/` directory. Bots access repositories at their actual paths via `allowedDirs` config
+
+### New Features
+
+- **Two-phase execution**: Triage (Haiku LLM decides what to do) → Execution (claude --print in repo dir)
+- **Schedule system**: Bots can auto-run via `cron` expressions or `onIdle` triggers
+- **Specialist bots**: Create read-only bots for security scanning, code improvement, test analysis, etc.
+- **Shared repo worklog**: All bots share a work history per repo (`~/.mococo/repos/<name>/worklog.md`)
+- **Per-bot personal memory**: Each bot maintains its own memory (`~/.mococo/bots/<id>/memory.md`)
+- **Adoption center CLI**: `mococo init`, `mococo adopt`, `mococo run`, `mococo list`, `mococo release`
+
+### Removed
+
+- `mococo start` (all-in-one) — replaced by `mococo run <id>` (one bot per terminal)
+- `mococo add` / `mococo remove` — replaced by `mococo adopt` / `mococo release`
+- `mococo dev` / `mococo restart` — not needed (just restart the process)
+- `teams.json` — replaced by per-bot `config.json` in `~/.mococo/bots/<id>/`
+- `repos/` symlink directory — bots access repos directly
+- Hook system (`hooks/`, `event-bridge.sh`, `permission-gate.sh`)
+- Heartbeat system (replaced by per-bot `schedule` config)
+- Improvement scanner (replaced by specialist bots)
+- Inbox compactor, dispatch ledger, stress tracker
+- Codex and Gemini engine support (Claude only for now)
+- MCP server config in bot config (repos bring their own MCP via `.claude/`)
+
+### Migration from 0.x
+
+1. Run `mococo init` to create `~/.mococo/`
+2. For each bot in your old `teams.json`, run `mococo adopt <id>`
+3. Copy persona content from old `prompts/<name>.md` to `~/.mococo/bots/<id>/persona.md`
+4. Set Discord tokens as environment variables
+5. Run each bot in a separate terminal: `mococo run <id>`
+
+---
 
 ## [0.9.0] - 2026-03-15
 
