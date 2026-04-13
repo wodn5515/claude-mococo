@@ -56,16 +56,30 @@ Discord 메시지 수신
 ### 1. Install / 설치
 
 ```bash
+npm install -g claude-mococo
+```
+
+Or run without installing / 설치 없이 실행:
+
+```bash
+npx claude-mococo init
+npx claude-mococo adopt leader
+npx claude-mococo run leader
+```
+
+From source / 소스에서 빌드:
+
+```bash
 git clone https://github.com/wodn5515/claude-mococo.git
 cd claude-mococo
-npm install
-npm run build
+npm install && npm run build
+npm link   # makes `mococo` command available globally
 ```
 
 ### 2. Initialize adoption center / 분양소 초기화
 
 ```bash
-node dist/cli/index.js init
+mococo init
 ```
 
 Creates `~/.mococo/` with the following structure:
@@ -91,22 +105,22 @@ For each bot you want to run:
 
 ```bash
 # Leader — coordinates, delegates, doesn't write code
-node dist/cli/index.js adopt leader
+mococo adopt leader
 
 # Backend developer
-node dist/cli/index.js adopt stack
+mococo adopt stack
 
 # Frontend developer
-node dist/cli/index.js adopt brush
+mococo adopt brush
 
 # Code reviewer — pushes branches, creates PRs
-node dist/cli/index.js adopt checker
+mococo adopt checker
 
 # (Optional) Security scanner — runs on cron, read-only
-node dist/cli/index.js adopt security
+mococo adopt security
 
 # (Optional) Code improver — runs when idle, read-only
-node dist/cli/index.js adopt improver
+mococo adopt improver
 ```
 
 The interactive wizard asks for: name, engine, model, Discord token, allowed directories, git identity.
@@ -276,19 +290,19 @@ Each bot in its own terminal tab:
 
 ```bash
 # Tab 1
-node dist/cli/index.js run leader
+mococo run leader
 
 # Tab 2
-node dist/cli/index.js run stack
+mococo run stack
 
 # Tab 3
-node dist/cli/index.js run checker
+mococo run checker
 
 # Tab 4 — security scanner (auto-runs every 3 hours)
-node dist/cli/index.js run security
+mococo run security
 
 # Tab 5 — code improver (auto-runs when idle 15min)
-node dist/cli/index.js run improver
+mococo run improver
 ```
 
 ### 8. Talk to them / 대화
