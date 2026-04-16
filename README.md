@@ -271,16 +271,21 @@ You are a code quality specialist. You find structural improvements, not bugs.
 
 ### 6. Set environment variables / 환경변수 설정
 
+Discord tokens are auto-saved to `~/.mococo/.env` during `mococo adopt`. You can also edit this file directly:
+
+`mococo adopt` 실행 시 Discord 토큰이 `~/.mococo/.env`에 자동 저장됩니다. 직접 편집도 가능:
+
 ```bash
-export LEADER_DISCORD_TOKEN="..."
-export STACK_DISCORD_TOKEN="..."
-export BRUSH_DISCORD_TOKEN="..."
-export CHECKER_DISCORD_TOKEN="..."
-export SECURITY_DISCORD_TOKEN="..."
-export IMPROVER_DISCORD_TOKEN="..."
+# ~/.mococo/.env
+LEADER_DISCORD_TOKEN=...
+STACK_DISCORD_TOKEN=...
+BRUSH_DISCORD_TOKEN=...
+CHECKER_DISCORD_TOKEN=...
 ```
 
-Or add to your shell profile (`~/.bashrc`, `~/.zshrc`).
+This file is auto-loaded by `mococo` on every command. No need to `source` or add to shell profile.
+
+이 파일은 `mococo` 실행 시 자동 로딩됩니다. `source`나 shell 프로필 설정 불필요.
 
 ### 7. Run bots / 봇 실행
 

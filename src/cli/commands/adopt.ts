@@ -65,11 +65,26 @@ export async function runAdopt(id?: string): Promise<void> {
   const gitName = await ask('Git author name (default: bot display name)') || name;
   const gitEmail = await ask('Git author email') || `${id}@users.noreply.github.com`;
 
-  // Save Discord token to .env-like approach: env var name
+  // Save Discord token to ~/.mococo/.env
   const discordTokenEnv = `${id.toUpperCase()}_DISCORD_TOKEN`;
   if (discordToken) {
-    console.log(`\nSet this environment variable before running the bot:`);
-    console.log(`  export ${discordTokenEnv}="${discordToken}"`);
+    const envPath = path.join(MOCOCO_HOME, '.env');
+    let envContent = '';
+    try {
+      envContent = fs.readFileSync(envPath, 'utf-8');
+    } catch {
+      envContent = '# Discord bot tokens (auto-loaded by mococo)\n\n';
+    }
+
+    // Remove existing line for this bot if present
+    const lines = envContent.split('\n').filter(l => !l.startsWith(`${discordTokenEnv}=`));
+    lines.push(`${discordTokenEnv}=${discordToken}`);
+
+    fs.writeFileSync(envPath, lines.join('\n') + '\n');
+    console.log(`\nDiscord token saved to ~/.mococo/.env (auto-loaded on every run)`);
+  } else {
+    console.log(`\nNo token provided. Add it later to ~/.mococo/.env:`);
+    console.log(`  ${discordTokenEnv}=<your-token>`);
   }
 
   // Build config (without id — it's inferred from the directory name)

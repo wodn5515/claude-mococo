@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
+import { loadEnvFile } from '../env.js';
 import { runInit } from './commands/init.js';
 import { runAdopt } from './commands/adopt.js';
 import { runRelease } from './commands/release.js';
 import { runList } from './commands/list.js';
 import { runBot } from './commands/run.js';
+
+// Auto-load ~/.mococo/.env before anything else
+loadEnvFile();
 
 const [,, command, ...args] = process.argv;
 

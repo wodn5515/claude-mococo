@@ -42,6 +42,20 @@ export async function runInit(): Promise<void> {
 
     // Create shared members file
     fs.writeFileSync(path.join(MOCOCO_HOME, 'shared', 'members.md'), '');
+
+    // Create .env template for Discord tokens
+    const envPath = path.join(MOCOCO_HOME, '.env');
+    const envTemplate = `# Discord bot tokens — one per bot.
+# Format: {BOT_ID_UPPERCASE}_DISCORD_TOKEN=<token>
+# Example:
+#   LEADER_DISCORD_TOKEN=your-token-here
+#   STACK_DISCORD_TOKEN=your-token-here
+#
+# mococo auto-loads this file when any command runs.
+# Don't share this file or commit it anywhere.
+
+`;
+    fs.writeFileSync(envPath, envTemplate);
   }
 
   closeRL();
