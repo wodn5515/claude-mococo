@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0] — 2026-04-16
+
+### New Features
+
+- **Self-modify via Discord chat**: Human can ask a bot to modify its own persona, memory, allowedDirs, schedule, or permissions through natural language. Security: only the user matching `humanDiscordId` can trigger self-modifications.
+  - Examples: "persona에 ~ 추가해", "memory 초기화해", "allowedDirs에 /path 추가", "매 2시간마다 자동 실행"
+- **Hot config reload**: Bot config is reloaded from disk on each message/trigger, so manual edits to `config.json` take effect without restart.
+- **Auto-load `~/.mococo/.env`**: Discord tokens in `~/.mococo/.env` are auto-loaded at CLI startup. `mococo adopt` saves tokens automatically.
+- **Wildcard in `allowedDirs`**: Use `"*"` to allow access to any directory.
+
 ## [1.0.0] — 2026-04-13
 
 ### Breaking Changes

@@ -81,7 +81,19 @@ export interface TriageIgnore {
   action: 'ignore';
 }
 
-export type TriageResult = TriageRepoWork | TriageReply | TriageIgnore;
+// Self-modify — edit bot's own config/persona/memory via Discord chat
+export type SelfModifyTarget = 'persona' | 'memory' | 'allowedDirs' | 'schedule' | 'permissions';
+export type SelfModifyOperation = 'replace' | 'append' | 'add' | 'remove' | 'clear' | 'set';
+
+export interface TriageSelfModify {
+  action: 'self_modify';
+  target: SelfModifyTarget;
+  operation: SelfModifyOperation;
+  value?: string | string[] | ScheduleConfig | { allow?: string[]; deny?: string[] };
+  confirmMessage: string;           // Message to reply on Discord after applying
+}
+
+export type TriageResult = TriageRepoWork | TriageReply | TriageIgnore | TriageSelfModify;
 
 // ---------------------------------------------------------------------------
 // Repo context (loaded from ~/.mococo/repos/<name>/)

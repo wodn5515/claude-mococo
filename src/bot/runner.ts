@@ -14,6 +14,7 @@ import { executeInRepo } from '../engine/claude-engine.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { extractMemoryUpdate, truncateForDiscord } from './post-process.js';
 import { Scheduler } from './scheduler.js';
+import { applySelfModify } from './self-modify.js';
 import type { BotConfig, GlobalConfig, TriageResult } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -128,10 +129,18 @@ export async function createBotRunner(
 
 async function handleScheduledTrigger(
   client: Client,
-  bot: BotConfig,
+  initialBot: BotConfig,
   global: GlobalConfig,
   trigger: 'cron' | 'idle',
 ): Promise<void> {
+  // Hot-reload bot config
+  let bot: BotConfig;
+  try {
+    bot = loadBotConfig(initialBot.id);
+  } catch {
+    bot = initialBot;
+  }
+
   const persona = loadPersona(bot.id);
   const botMemory = loadBotMemory(bot.id);
   const repos = loadRepoSummaries(bot.allowedDirs);
@@ -144,10 +153,11 @@ async function handleScheduledTrigger(
 
   console.log(`[${bot.name}] Scheduled trigger (${trigger}): starting triage`);
 
-  const decision = await triage(systemMessage, 'system', bot, botMemory, repos, global, otherBots);
+  // authorId 'system' — prevents self_modify from triggering on scheduled runs
+  const decision = await triage(systemMessage, 'system', 'system', bot, botMemory, repos, global, otherBots);
   console.log(`[${bot.name}] Triage: ${decision.action}${decision.action === 'repo_work' ? ` → ${decision.repoName}` : ''}`);
 
-  if (decision.action === 'ignore') return;
+  if (decision.action === 'ignore' || decision.action === 'self_modify') return;
 
   // Find the report channel
   const reportChannelId = bot.schedule?.reportChannel || bot.channels?.[0];
@@ -207,11 +217,20 @@ async function handleScheduledTrigger(
 
 async function handleMessage(
   message: Message,
-  bot: BotConfig,
+  initialBot: BotConfig,
   global: GlobalConfig,
 ): Promise<void> {
+  // Hot-reload bot config (picks up allowedDirs/schedule/permissions changes)
+  let bot: BotConfig;
+  try {
+    bot = loadBotConfig(initialBot.id);
+  } catch {
+    bot = initialBot;
+  }
+
   const content = message.content;
   const authorName = message.author.username;
+  const authorId = message.author.id;
 
   console.log(`[${bot.name}] Message from ${authorName}: ${content.slice(0, 100)}`);
 
@@ -226,13 +245,32 @@ async function handleMessage(
     const repos = loadRepoSummaries(bot.allowedDirs);
     const otherBots = getOtherBots(bot.id);
 
-    const decision = await triage(content, authorName, bot, botMemory, repos, global, otherBots);
+    const decision = await triage(content, authorName, authorId, bot, botMemory, repos, global, otherBots);
     console.log(`[${bot.name}] Triage: ${decision.action}${decision.action === 'repo_work' ? ` → ${decision.repoName}` : ''}`);
 
     if (decision.action === 'ignore') return;
 
     if (decision.action === 'reply') {
       await sendLongMessage(message, decision.message);
+      return;
+    }
+
+    // self_modify — only the human can modify this bot
+    if (decision.action === 'self_modify') {
+      if (!global.humanDiscordId || authorId !== global.humanDiscordId) {
+        console.warn(`[${bot.name}] self_modify rejected: author ${authorId} is not the human`);
+        await message.reply('자기 수정 요청은 권한이 있는 사용자만 가능합니다.');
+        return;
+      }
+
+      try {
+        const statusInfo = applySelfModify(bot.id, decision);
+        console.log(`[${bot.name}] self_modify applied: ${decision.target}/${decision.operation} — ${statusInfo}`);
+        await sendLongMessage(message, decision.confirmMessage);
+      } catch (err) {
+        console.error(`[${bot.name}] self_modify error:`, err);
+        await message.reply(`수정 실패: ${(err as Error).message}`);
+      }
       return;
     }
 

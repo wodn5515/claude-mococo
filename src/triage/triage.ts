@@ -8,6 +8,7 @@ import type { BotConfig, GlobalConfig, RepoInfo, TriageResult } from '../types.j
 function buildTriagePrompt(
   message: string,
   authorName: string,
+  authorId: string,
   bot: BotConfig,
   botMemory: string,
   repos: RepoInfo[],
@@ -43,26 +44,45 @@ ${botList || '(none)'}
 ${global.humanDiscordId ? `Discord ID: <@${global.humanDiscordId}>, Title: ${global.humanTitle ?? 'Boss'}` : 'Not configured'}
 
 ## Incoming Message
-From: ${authorName}
+From: ${authorName} (Discord ID: ${authorId})
 Content: ${message}
 
 ## Decision Rules
-1. If the message asks for code work in a specific repo → repo_work
-2. If the message is a general question, greeting, or status request → reply
-3. If the message is not relevant to this bot → ignore
-4. For repo_work: choose the best matching repo from Available Repositories
-5. For repo_work: write a clear, actionable task description that claude can execute
+1. If the message is from the Human (matching Human Discord ID above) AND asks to modify this bot's own persona/memory/allowedDirs/schedule/permissions → self_modify
+2. If the message asks for code work in a specific repo → repo_work
+3. If the message is a general question, greeting, or status request → reply
+4. If the message is not relevant to this bot → ignore
+5. For repo_work: choose the best matching repo from Available Repositories
+6. For repo_work: write a clear, actionable task description that claude can execute
+
+## Self-Modify Rules (ONLY if sender matches Human Discord ID)
+The human can ask you to modify yourself via natural language. Recognize patterns like:
+- "페르소나에 ~ 추가해" / "persona에 ~ 추가" → target=persona, operation=append
+- "페르소나 이걸로 바꿔: ~" / "persona 교체" → target=persona, operation=replace
+- "memory 초기화" / "기억 지워" → target=memory, operation=clear
+- "allowedDirs에 /path 추가" / "작업 레포에 /path 추가" → target=allowedDirs, operation=add
+- "allowedDirs에서 /path 제거" → target=allowedDirs, operation=remove
+- "schedule 삭제" / "스케줄 꺼" → target=schedule, operation=clear
+- "매 2시간마다 자동 실행하게 해" → target=schedule, operation=set, value={"cron":"0 */2 * * *"}
+- "idle 15분 후 자동 실행" → target=schedule, operation=set, value={"onIdle":true,"idleDelayMinutes":15}
+- "git push 금지" → target=permissions, operation=add, value={"deny":["git push"]}
+
+For self_modify, always include a friendly "confirmMessage" in the bot's own voice (matching the persona).
 
 ## Output
 Respond with ONLY a JSON object (no markdown fencing):
-- repo_work: {"action":"repo_work","repoName":"<name>","repo":"<absolute_path>","task":"<detailed task description>"}
+- repo_work: {"action":"repo_work","repoName":"<name>","repo":"<absolute_path>","task":"<detailed task>"}
 - reply: {"action":"reply","message":"<your response text>"}
-- ignore: {"action":"ignore"}`;
+- ignore: {"action":"ignore"}
+- self_modify: {"action":"self_modify","target":"<target>","operation":"<op>","value":<value>,"confirmMessage":"<reply>"}`;
 }
 
 // ---------------------------------------------------------------------------
 // Parse triage response
 // ---------------------------------------------------------------------------
+
+const VALID_TARGETS = new Set(['persona', 'memory', 'allowedDirs', 'schedule', 'permissions']);
+const VALID_OPERATIONS = new Set(['replace', 'append', 'add', 'remove', 'clear', 'set']);
 
 function parseTriageResponse(output: string): TriageResult {
   // Strip markdown fences if present
@@ -89,6 +109,18 @@ function parseTriageResponse(output: string): TriageResult {
     if (parsed.action === 'ignore') {
       return { action: 'ignore' };
     }
+
+    if (parsed.action === 'self_modify'
+        && VALID_TARGETS.has(parsed.target)
+        && VALID_OPERATIONS.has(parsed.operation)) {
+      return {
+        action: 'self_modify',
+        target: parsed.target,
+        operation: parsed.operation,
+        value: parsed.value,
+        confirmMessage: parsed.confirmMessage || 'Applied.',
+      };
+    }
   } catch {
     // If JSON parsing fails, treat as a direct reply
   }
@@ -108,13 +140,14 @@ function parseTriageResponse(output: string): TriageResult {
 export async function triage(
   message: string,
   authorName: string,
+  authorId: string,
   bot: BotConfig,
   botMemory: string,
   repos: RepoInfo[],
   global: GlobalConfig,
   otherBots: { id: string; name: string; discordUserId?: string }[],
 ): Promise<TriageResult> {
-  const prompt = buildTriagePrompt(message, authorName, bot, botMemory, repos, global, otherBots);
+  const prompt = buildTriagePrompt(message, authorName, authorId, bot, botMemory, repos, global, otherBots);
 
   try {
     const output = await runHaiku(prompt);
