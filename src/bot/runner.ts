@@ -168,7 +168,7 @@ async function handleScheduledTrigger(
   const { repo, repoName, task } = decision;
 
   // Validate repo path
-  if (!bot.allowedDirs.some(d => repo === d || repo.startsWith(d + '/'))) {
+  if (!isPathAllowed(repo, bot.allowedDirs)) {
     console.warn(`[${bot.name}] Scheduled triage returned unauthorized path: ${repo}`);
     return;
   }
@@ -240,7 +240,7 @@ async function handleMessage(
     const { repo, repoName, task } = decision;
 
     // Validate repo path is in allowed directories
-    if (!bot.allowedDirs.some(d => repo === d || repo.startsWith(d + '/'))) {
+    if (!isPathAllowed(repo, bot.allowedDirs)) {
       console.warn(`[${bot.name}] Triage returned unauthorized path: ${repo}`);
       await message.reply(`접근 권한이 없는 경로입니다: ${repo}`);
       return;
@@ -282,6 +282,15 @@ async function handleMessage(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Check if a path is allowed.
+ * Special: "*" in allowedDirs means any path is allowed.
+ */
+function isPathAllowed(repoPath: string, allowedDirs: string[]): boolean {
+  if (allowedDirs.includes('*')) return true;
+  return allowedDirs.some(d => repoPath === d || repoPath.startsWith(d + '/'));
+}
 
 function getOtherBots(currentBotId: string) {
   return listBotIds()

@@ -181,6 +181,9 @@ export function loadRepoSummaries(allowedDirs: string[]): RepoInfo[] {
   const infos: RepoInfo[] = [];
 
   for (const dirPath of allowedDirs) {
+    // Skip wildcards — they are not real paths
+    if (dirPath === '*' || !path.isAbsolute(dirPath)) continue;
+
     const name = path.basename(dirPath);
     const context = loadRepoContext(name);
     const fullWorklog = loadWorklog(name);

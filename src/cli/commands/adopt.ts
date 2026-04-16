@@ -38,11 +38,20 @@ export async function runAdopt(id?: string): Promise<void> {
 
   // Allowed directories
   console.log('\nAllowed directories (absolute paths this bot can work in):');
-  console.log('Enter one per line. Empty line to finish.\n');
+  console.log('Enter one per line. Empty line to finish.');
+  console.log('Use "*" to allow all directories (no restriction).\n');
   const allowedDirs: string[] = [];
   while (true) {
     const dir = await ask(`  Directory ${allowedDirs.length + 1}`);
     if (!dir) break;
+
+    // Wildcard — allow all
+    if (dir === '*') {
+      allowedDirs.push('*');
+      console.log('  → Wildcard: this bot can access any directory');
+      continue;
+    }
+
     const resolved = path.resolve(dir);
     if (!fs.existsSync(resolved)) {
       console.warn(`  Warning: ${resolved} does not exist (will be created when needed)`);
