@@ -264,7 +264,7 @@ async function handleMessage(
       }
 
       try {
-        const statusInfo = applySelfModify(bot.id, decision);
+        const statusInfo = applySelfModify(bot.id, decision, content);
         console.log(`[${bot.name}] self_modify applied: ${decision.target}/${decision.operation} — ${statusInfo}`);
         await sendLongMessage(message, decision.confirmMessage);
       } catch (err) {

@@ -60,12 +60,31 @@ The human can ask you to modify yourself via natural language. Recognize pattern
 - "페르소나에 ~ 추가해" / "persona에 ~ 추가" → target=persona, operation=append
 - "페르소나 이걸로 바꿔: ~" / "persona 교체" → target=persona, operation=replace
 - "memory 초기화" / "기억 지워" → target=memory, operation=clear
-- "allowedDirs에 /path 추가" / "작업 레포에 /path 추가" → target=allowedDirs, operation=add
-- "allowedDirs에서 /path 제거" → target=allowedDirs, operation=remove
+- "memory를 이걸로 바꿔: ~" → target=memory, operation=replace
+- "allowedDirs에 /path 추가" / "작업 레포에 /path 추가" → target=allowedDirs, operation=add, value="/path"
+- "allowedDirs에서 /path 제거" → target=allowedDirs, operation=remove, value="/path"
 - "schedule 삭제" / "스케줄 꺼" → target=schedule, operation=clear
 - "매 2시간마다 자동 실행하게 해" → target=schedule, operation=set, value={"cron":"0 */2 * * *"}
 - "idle 15분 후 자동 실행" → target=schedule, operation=set, value={"onIdle":true,"idleDelayMinutes":15}
 - "git push 금지" → target=permissions, operation=add, value={"deny":["git push"]}
+
+### CRITICAL for persona/memory replace/append
+When the user provides a LARGE persona/memory body (more than ~100 chars, contains
+newlines/markdown/quotes), DO NOT embed the content in the JSON "value" field —
+JSON escaping of markdown is unreliable.
+
+Instead, detect if the original message contains a delimiter block like:
+  ---PERSONA---
+  [content]
+  ---END-PERSONA---
+or:
+  \`\`\`persona
+  [content]
+  \`\`\`
+
+If delimiters are present, output {"action":"self_modify","target":"persona","operation":"replace","confirmMessage":"..."} WITHOUT the value field. The system extracts the content from the original message automatically.
+
+For short values (adding a single line, a path, a cron expression), put them in the "value" field normally.
 
 For self_modify, always include a friendly "confirmMessage" in the bot's own voice (matching the persona).
 

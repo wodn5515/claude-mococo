@@ -11,11 +11,64 @@ import {
 import type { BotConfig, TriageSelfModify } from '../types.js';
 
 /**
+ * Extract content between delimiters from the original user message.
+ * Supports ---PERSONA---, ---MEMORY---, ```persona, ```memory code blocks, etc.
+ */
+function extractDelimitedContent(originalMessage: string, target: string): string | null {
+  const upperTarget = target.toUpperCase();
+
+  // Try ---TARGET--- ... ---END-TARGET--- first
+  const blockRegex = new RegExp(
+    `---${upperTarget}---([\\s\\S]*?)---END-${upperTarget}---`,
+    'i',
+  );
+  const blockMatch = originalMessage.match(blockRegex);
+  if (blockMatch) return blockMatch[1].trim();
+
+  // Try fenced code block: ```persona ... ```
+  const fenceRegex = new RegExp(
+    `\\\`\\\`\\\`${target}\\s*\\n?([\\s\\S]*?)\\n?\\\`\\\`\\\``,
+    'i',
+  );
+  const fenceMatch = originalMessage.match(fenceRegex);
+  if (fenceMatch) return fenceMatch[1].trim();
+
+  return null;
+}
+
+/**
  * Apply a self-modify operation to the bot's config/persona/memory.
+ * `originalMessage` is the raw Discord message — used to extract delimited
+ * content for large values (persona/memory) that are unreliable via JSON.
  * Returns a status message describing what was changed.
  */
-export function applySelfModify(botId: string, op: TriageSelfModify): string {
+export function applySelfModify(
+  botId: string,
+  op: TriageSelfModify,
+  originalMessage: string,
+): string {
   const config = loadBotConfig(botId);
+
+  // For persona/memory large-content ops, try to extract from delimiters in the
+  // original message — this bypasses fragile JSON escaping in the LLM output.
+  if ((op.target === 'persona' || op.target === 'memory')
+      && (op.operation === 'replace' || op.operation === 'append')
+      && typeof op.value !== 'string') {
+    const extracted = extractDelimitedContent(originalMessage, op.target);
+    if (extracted) {
+      op = { ...op, value: extracted };
+    }
+  }
+
+  // Also prefer delimiter content if LLM value looks suspicious (empty or malformed)
+  if ((op.target === 'persona' || op.target === 'memory')
+      && (op.operation === 'replace' || op.operation === 'append')
+      && (!op.value || (typeof op.value === 'string' && op.value.length < 20))) {
+    const extracted = extractDelimitedContent(originalMessage, op.target);
+    if (extracted && extracted.length > 20) {
+      op = { ...op, value: extracted };
+    }
+  }
 
   switch (op.target) {
     case 'persona':
